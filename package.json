@@ -1,0 +1,16 @@
+{
+  "name": "fighter-arena",
+  "version": "2.1.0",
+  "description": "Realtime 1v1 fighting game with map ban/pick and 8-class character select incl. 장유준(성검 해방) (Socket.io)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "socket.io": "^4.7.5"
+  }
+}

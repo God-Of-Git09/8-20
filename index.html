@@ -1,0 +1,1698 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Fighter Arena</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#08080f;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;font-family:'Segoe UI',Arial,sans-serif;color:#fff;user-select:none}
+h1{font-size:22px;letter-spacing:4px;color:#f0c040;text-shadow:0 0 20px #f0804088;margin-bottom:8px;text-transform:uppercase}
+#wrap{position:relative;display:inline-block}
+canvas{display:block;border:2px solid #2a2a4a;border-radius:4px;box-shadow:0 0 40px #0008}
+#hud{display:flex;gap:14px;margin-top:8px;justify-content:center;flex-wrap:wrap}
+.ctrl-box{background:#111;border:1px solid #2a2a4a;border-radius:8px;padding:7px 14px;font-size:11px;color:#888;line-height:1.8;text-align:center}
+.ctrl-box b{color:#ccc}
+#conn{position:absolute;top:8px;right:10px;font-size:11px;color:#666;z-index:5}
+
+.overlay{position:absolute;inset:0;background:#0a0a14ee;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px;border-radius:4px;overflow-y:auto;z-index:10}
+.overlay.hidden{display:none}
+.overlay h2{color:#f0c040;letter-spacing:2px;margin-bottom:6px}
+#mapTimer,#csTimer{color:#f55;font-weight:bold;margin-bottom:14px}
+.map-grid{display:flex;gap:14px;flex-wrap:wrap;justify-content:center;max-width:820px}
+.map-card{width:150px;height:100px;border:2px solid #333;border-radius:8px;background:linear-gradient(135deg,#1a1a2e,#0d0d18);display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;transition:.15s;text-align:center;padding:6px}
+.map-card:hover{border-color:#f0c040}
+.map-card.picked-me{border-color:#ff5555;box-shadow:0 0 14px #ff555588}
+.map-card.disabled{opacity:.35;pointer-events:none}
+.map-card-name{font-weight:bold;font-size:14px;color:#eee}
+.map-card-tag{font-size:10px;color:#888;margin-top:6px}
+#mapStatus{margin-top:14px;color:#aaa;font-size:13px}
+
+#csMapName{color:#f0c040;font-weight:bold}
+.cs-top{display:flex;gap:20px;margin-bottom:10px;align-items:center}
+.class-grid{display:flex;flex-direction:column;gap:8px;max-width:820px;width:100%;max-height:300px;overflow-y:auto}
+.class-section{display:flex;align-items:center;gap:10px;border-top:1px solid #222;padding-top:6px}
+.class-title{width:64px;flex-shrink:0;color:#ccc;font-size:12px;font-weight:bold;text-align:right}
+.class-row{display:flex;gap:8px;flex-wrap:wrap}
+.char-card{width:74px;padding:6px 4px;border:2px solid #333;border-radius:6px;background:#12121e;text-align:center;cursor:pointer;transition:.15s}
+.char-card:hover{border-color:#f0c040}
+.char-card.picked-me{border-color:#5af;box-shadow:0 0 12px #5af8}
+.char-avatar{width:100%;height:34px;border-radius:4px;margin-bottom:4px;opacity:.85}
+.char-name{font-size:11px;color:#ddd}
+.char-title{font-size:8.5px;color:#888;margin-top:1px;line-height:1.2}
+.cs-bottom{margin-top:14px;display:flex;gap:16px;align-items:center}
+#readyBtn{background:#222;color:#f0c040;border:2px solid #f0c040;border-radius:6px;padding:8px 22px;font-weight:bold;cursor:pointer;transition:.15s}
+#readyBtn:disabled{opacity:.4;cursor:not-allowed}
+#readyBtn.ready{background:#f0c040;color:#111}
+#csMyPick,#csOppStatus{font-size:12px;color:#aaa}
+</style>
+</head>
+<body>
+<h1>⚔ Fighter Arena</h1>
+<div id="wrap">
+  <canvas id="c" width="900" height="500"></canvas>
+  <div id="conn">● disconnected</div>
+
+  <div id="mapSelectOverlay" class="overlay hidden">
+    <h2>맵 밴 선택</h2>
+    <div id="mapTimer">15초</div>
+    <div id="mapGrid" class="map-grid"></div>
+    <div id="mapStatus"></div>
+  </div>
+
+  <div id="charSelectOverlay" class="overlay hidden">
+    <div class="cs-top">
+      <div id="csMapName"></div>
+      <div id="csTimer">20초</div>
+    </div>
+    <div id="classGrid" class="class-grid"></div>
+    <div class="cs-bottom">
+      <div id="csMyPick"></div>
+      <button id="readyBtn" disabled>준비</button>
+      <div id="csOppStatus"></div>
+    </div>
+  </div>
+</div>
+<div id="hud">
+  <div class="ctrl-box">
+    <b>공통 조작키</b><br>
+    이동: <b>A/D</b> &nbsp; 점프: <b>W</b> &nbsp; 가드: <b>Shift</b><br>
+    평타:<b>J</b> E:<b>K</b> R:<b>L</b> T:<b>U</b> F:<b>I</b> 궁극기:<b>O</b>
+  </div>
+  <div class="ctrl-box">
+    각 스킬의 이름과 쿨타임은<br>캐릭터 선택 후 화면 하단<br>스킬바에 표시됩니다.
+  </div>
+</div>
+
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js" crossorigin="anonymous"></script>
+<script>
+'use strict';
+const canvas=document.getElementById('c');
+const ctx=canvas.getContext('2d');
+const W=canvas.width,H=canvas.height;
+
+// ─── Constants (서버와 동일하게 유지) ─────────────────────────────────────────
+const FLOOR_Y=430,PLAYER_W=44,PLAYER_H=80,GRAVITY=0.85,JUMP_FORCE=-19;
+const ULT_GAUGE_MAX=100;
+const JUST_GUARD_WINDOW=10; // 서버와 동일한 값 — 가드 색상 표시에만 쓰임(판정은 서버가 함)
+const ATK_DUR={skill_e:18,skill_r:12,skill_f:20,skill_t:16,skill_x:30};
+// 평타 4단 콤보 테이블 (서버와 동일해야 로컬 예측이 어긋나지 않는다)
+const COMBO_ATK=[
+  {dur:12,trigger:6,recovery:18,dmgMul:1.00},
+  {dur:13,trigger:6,recovery:20,dmgMul:1.08},
+  {dur:14,trigger:7,recovery:22,dmgMul:1.18},
+  {dur:20,trigger:10,recovery:30,dmgMul:1.50}
+];
+const COMBO_CHAIN_GRACE=26;
+const COMBO_FINISHER_CD=180;
+function attackDur(step){return (COMBO_ATK[step]||COMBO_ATK[0]).dur;}
+
+const CLASS_LABELS={saber:'세이버',lancer:'랜서',archer:'아처',berserker:'버서커',caster:'캐스터',rider:'라이더',assassin:'어쌔신'};
+const CLASS_ORDER=['saber','lancer','archer','berserker','caster','rider','assassin'];
+// 캐릭터별 스킬 이름 — 14인 전원이 서로 겹치지 않는 개별 스킬셋을 갖는다.
+// E(K키)는 모든 영웅 공통으로 "원거리 공격" 슬롯이다.
+const CHAR_SKILL_NAMES={
+  saber_musashi:   {e:'이도류 십자검기', r:'돌진베기',       t:'카운터',         f:'회전베기'},
+  saber_arthur:    {e:'엑스칼리버 참격', r:'왕의 돌격',       t:'수호의 검',      f:'결계의 선풍'},
+  lancer_guanyu:   {e:'관통투창',        r:'갈고리 당기기',   t:'파랑삼첩',       f:'창비'},
+  lancer_achilles: {e:'트리플 창던지기', r:'신속의 돌진',     t:'관통찌르기',     f:'분노의 창격'},
+  archer_artemis:  {e:'달빛 포물선',     r:'회피',            t:'포박 사격',      f:'달빛 화살비'},
+  archer_jumong:   {e:'연사 이중사격',   r:'전진 회피',       t:'관통 저격',      f:'백발백중 연환사'},
+  berserker_hercules:{e:'네메아 투석',   r:'돌진강타',        t:'대지분쇄',       f:'광란연타'},
+  berserker_ragnar:{e:'회전 도끼',       r:'돌진강타',        t:'광폭화 도약강타', f:'폭풍연격'},
+  caster_merlin:   {e:'유도 마력구',     r:'블링크',          t:'속박마법진',     f:'메테오'},
+  caster_circe:    {e:'분열하는 저주구', r:'순간이동',        t:'짐승화 저주',    f:'저주의 비'},
+  caster_ph:       {e:'매직 카드 난사', r:'사라지는 마술',   t:'손안의 마술',    f:'관통 마술'},
+  rider_yisunsin:  {e:'함포 연속사격',   r:'돌격',            t:'짓밟기',         f:'질주강타'},
+  rider_khan:      {e:'연환 기사궁술',   r:'돌격',            t:'질풍돌파',       f:'초원의 질주'},
+  assassin_hanzo:  {e:'곡사 수리검',     r:'그림자 이동',     t:'단검난무',       f:'독날림'},
+  assassin_jingke: {e:'은닉 비수',       r:'접근',            t:'쌍비수 투척',    f:'결정타'},
+  saber_jangyujun: {e:'싸기',            r:'냅다 박기',       t:'잡고 박기',      f:'찍'}
+};
+// 장유준은 궁극기(성검 해방) 이후 스킬셋 전체가 바뀐다 — 변신 전/후 이름을 따로 관리한다.
+const JANGYUJUN_NAMES={
+  pre:  {e:'싸기',        r:'냅다 박기', t:'잡고 박기',   f:'찍'},
+  post: {e:'성검 날리기', r:'찌르기',    t:'성검 회오리', f:'찍'}
+};
+function skillNamesFor(p){
+  if(p.charId==='saber_jangyujun')return p.transformed?JANGYUJUN_NAMES.post:JANGYUJUN_NAMES.pre;
+  return CHAR_SKILL_NAMES[p.charId]||{};
+}
+// 서버와 동일해야 하는 장유준 전용 스킬 지속시간/쿨타임 (로컬 예측/무기 모션용)
+function jySkillDur(action,transformed){
+  if(action==='skill_r')return 22;
+  if(action==='skill_t')return 78;
+  if(action==='skill_f')return transformed?220:130;
+  return null;
+}
+const JY_F_COOLDOWN=60*13;
+const CLASS_CD={
+  saber:{e:60*3.5,r:60*3,t:60*7,f:60*8},
+  lancer:{e:60*4,r:60*3.2,t:60*7.5,f:60*8.7},
+  archer:{e:60*4.3,r:60*3.7,t:60*7.2,f:60*8.7},
+  berserker:{e:60*4.7,r:60*4.3,t:60*8,f:60*9.3},
+  caster:{e:60*3.7,r:60*2.8,t:60*7.3,f:60*9},
+  rider:{e:60*3.8,r:60*3.3,t:60*7,f:60*8.7},
+  assassin:{e:60*3,r:60*2.7,t:60*6.7,f:60*8}
+};
+// 캐릭터별 궁극기 지속 프레임(서버와 동일해야 로컬 예측이 어긋나지 않는다)
+const ULT_DUR={
+  saber_musashi:108, saber_arthur:150, saber_jangyujun:118,
+  lancer_guanyu:118, lancer_achilles:120,
+  archer_artemis:130, archer_jumong:110,
+  berserker_hercules:130, berserker_ragnar:130,
+  caster_merlin:150, caster_circe:130, caster_ph:70,
+  rider_yisunsin:240, rider_khan:140,
+  assassin_hanzo:116, assassin_jingke:130
+};
+// 캐릭터별 궁극기 이름(스킬바 표시용 — 궁극기는 더 이상 클래스 공용이 아니다)
+const ULT_NAMES={
+  saber_musashi:'이도류 십자참', saber_arthur:'엑스칼리버 강림', saber_jangyujun:'성검 해방',
+  lancer_guanyu:'청룡언월 파랑삼첩', lancer_achilles:'성난 질풍의 창',
+  archer_artemis:'달빛의 사냥', archer_jumong:'백발백중 관통사격',
+  berserker_hercules:'네메아의 사자, 대지강타', berserker_ragnar:'발할라의 폭풍도끼',
+  caster_merlin:'심판의 빛', caster_circe:'짐승으로', caster_ph:'선녀와 나무꾼',
+  rider_yisunsin:'불멸의 이순신', rider_khan:'초원의 기마돌격',
+  assassin_hanzo:'그림자 분신난도', assassin_jingke:'필살의 비수'
+};
+const MAP_TAGS={
+  colosseum:'중형 · 중앙 고지대',
+  frozen_canyon:'대형 · 3단 지형',
+  volcanic_field:'소형 · 근접전 특화',
+  ruined_temple:'대형 · 다층 구조',
+  twilight_bridge:'초대형 · 장거리 브릿지'
+};
+
+const SK_KEYS=['atk','e','r','f','t','x'];
+const SK_LABEL=['J','K','L','I','U','O'];
+const SK_COLOR=['#ddd','#4fc','#fc4','#a8f','#f84','#fa0'];
+
+// ─── State ─────────────────────────────────────────────────────────────────
+let myIndex=-1,gameState=null,prevPhase=null;
+let local=null,prevJump=false;
+let eFrom=null,eTo=null,eT=0;
+let shakeMag=0,camX=0;
+let CHARACTERS_DATA=[],MAPS_DATA=[];
+let prevAction=[null,null],ultCine=null; // 궁극기 연출 상태
+const ULT_CINE_MS=1450; // 연출 지속 시간(실시간 ms) — 궁극기를 더 웅장하게 보여주기 위해 연장
+
+function charName(id){ const c=CHARACTERS_DATA.find(c=>c.id===id); return c?c.name:'?'; }
+function charDef(id){ return CHARACTERS_DATA.find(c=>c.id===id); }
+
+// ─── Input ─────────────────────────────────────────────────────────────────
+const inp={left:false,right:false,jump:false,attack:false,guard:false,
+           skill_e:false,skill_r:false,skill_f:false,skill_t:false,skill_x:false};
+
+const KEYMAP={
+  KeyA:{k:'left'},KeyD:{k:'right'},KeyW:{k:'jump'},
+  KeyJ:{k:'attack'},KeyK:{k:'skill_e'},KeyL:{k:'skill_r'},
+  KeyU:{k:'skill_t'},KeyI:{k:'skill_f'},KeyO:{k:'skill_x'},
+  ShiftLeft:{k:'guard'},ShiftRight:{k:'guard'}
+};
+
+window.addEventListener('keydown',e=>{
+  const m=KEYMAP[e.code];
+  if(!m||myIndex<0)return;
+  e.preventDefault();
+  if(inp[m.k])return;
+  inp[m.k]=true;
+  socket.emit('input',inp);
+  applyLocalAction(m.k);
+});
+window.addEventListener('keyup',e=>{
+  const m=KEYMAP[e.code];
+  if(!m||myIndex<0)return;
+  inp[m.k]=false;
+  socket.emit('input',inp);
+});
+
+function resetLocalCombo(){local.comboStep=0;local.atkRecoveryTimer=0;local.comboWindowTimer=0;}
+
+function applyLocalAction(key){
+  if(!local||local.action==='dead')return;
+  if(!gameState||gameState.phase!=='playing')return;
+  const locked=(['attack','skill_e','skill_r','skill_f','skill_t','skill_x','hurt'].includes(local.action)
+               &&local.actionTimer>0)||local.trapped>0||local.action==='guard';
+  if(locked)return;
+  const isJY=local.charId==='saber_jangyujun';
+  if(key==='attack'){
+    if(isJY&&!local.transformed)return; // 맨주먹 상태엔 평타가 없다
+    if((local.atkRecoveryTimer||0)>0)return;
+    const step=local.comboStep||0;
+    local.action='attack'; local.attackStep=step; local.actionTimer=attackDur(step);
+  }
+  else if(key==='skill_e'&&local.cooldowns.e===0){resetLocalCombo();local.action='skill_e';local.actionTimer=ATK_DUR.skill_e;}
+  else if(key==='skill_r'&&local.cooldowns.r===0){resetLocalCombo();local.action='skill_r';local.actionTimer=isJY?jySkillDur('skill_r'):ATK_DUR.skill_r;}
+  else if(key==='skill_f'&&local.cooldowns.f===0&&!(isJY&&local.transformed&&local._jyLaserUsed)){resetLocalCombo();local.action='skill_f';local.actionTimer=isJY?jySkillDur('skill_f',local.transformed):ATK_DUR.skill_f;}
+  else if(key==='skill_t'&&local.cooldowns.t===0){resetLocalCombo();local.action='skill_t';local.actionTimer=isJY?jySkillDur('skill_t'):ATK_DUR.skill_t;}
+  else if(key==='skill_x'&&local.ultGauge>=ULT_GAUGE_MAX&&!(isJY&&local.transformed)){resetLocalCombo();local.action='skill_x';local.actionTimer=ULT_DUR[local.charId]||70;}
+}
+
+// ─── Socket ─────────────────────────────────────────────────────────────────
+const socket=io({path:'/api/socket.io',transports:['websocket','polling']});
+const connEl=document.getElementById('conn');
+socket.on('connect',()=>{connEl.textContent='● connected';connEl.style.color='#4f4';});
+socket.on('disconnect',()=>{
+  connEl.textContent='● disconnected';connEl.style.color='#f44';
+  gameState=null;local=null;eFrom=null;eTo=null;prevPhase=null;prevAction=[null,null];ultCine=null;
+  document.getElementById('mapSelectOverlay').classList.add('hidden');
+  document.getElementById('charSelectOverlay').classList.add('hidden');
+});
+socket.on('welcome',({index,characters,maps})=>{
+  myIndex=index;
+  CHARACTERS_DATA=characters||[]; MAPS_DATA=maps||[];
+  connEl.textContent=`● Player ${index+1}`;connEl.style.color=index===0?'#5af':'#f55';
+  buildMapGrid(); buildCharGrid();
+});
+socket.on('full',()=>{connEl.textContent='● Game full';connEl.style.color='#fa0';});
+
+socket.on('gameState',snap=>{
+  if(prevPhase==='game_over'&&(snap.phase==='map_select'||snap.phase==='countdown')){local=null;eFrom=null;eTo=null;eT=0;prevAction=[null,null];ultCine=null;}
+  prevPhase=snap.phase;
+  gameState=snap;
+
+  if(snap.phase==='playing'){
+    for(const pl of snap.players){
+      if(pl&&pl.action==='skill_x'&&prevAction[pl.index]!=='skill_x'){
+        const def=charDef(pl.charId);
+        ultCine={index:pl.index,name:def?def.name:'',line:def?(def.ultLine||''):'',color:pl.color,x:pl.x,y:pl.y,elapsed:0};
+      }
+      if(pl)prevAction[pl.index]=pl.action;
+    }
+  }
+
+  for(const fx of snap.effects){
+    if(fx.life===fx.maxLife){
+      if(fx.type==='turtle_land_impact')addShake(22);
+      else if(fx.type==='ultimate'||fx.type==='turtle_charge'||fx.type==='turtle_ride'||fx.type==='excalibur_strike'||fx.type==='assassinate')addShake(16);
+      else if(fx.type==='laser'||fx.type==='judgment_beam'||fx.type==='khan_charge'||fx.type==='cross_slash')addShake(12);
+      else if(fx.type==='parry')addShake(10);
+      else if(fx.type==='barrier'||fx.type==='turtle_summon'||fx.type==='shadow_clone'||fx.type==='yisunsin_mount')addShake(6);
+      else if(fx.type==='whirl'||fx.type==='storm_ring'||fx.type==='stun_hit')addShake(5);
+      else if(fx.type==='impact'||fx.type==='turtle_cannon')addShake(fx.type==='impact'?4*(fx.power||1):4);
+      else if(fx.type==='hit'||fx.type==='guard_block')addShake(3);
+    }
+  }
+
+  if(myIndex<0)return;
+  const me=snap.players.find(p=>p.index===myIndex);
+  if(!me)return;
+  if(!local){local={...me};prevJump=false;return;}
+
+  // Reconcile
+  local.hp=me.hp; local.maxHp=me.maxHp; local.speed=me.speed;
+  local.cooldowns={...me.cooldowns};
+  local.invincible=me.invincible;
+  local.trapped=me.trapped;
+  local.ultGauge=me.ultGauge;
+  local.transformed=me.transformed;
+  local._jyLaserUsed=me._jyLaserUsed;
+
+  const sp=['hurt','dead'].includes(me.action)||me.action==='skill_e';
+  if(sp){
+    local.action=me.action;local.actionTimer=me.actionTimer;local.facing=me.facing;
+    // 피격/사망 등으로 서버가 강제 개입한 시점엔 콤보 상태도 서버 기준으로 맞춘다 (피격 시 콤보 끊김).
+    local.comboStep=me.comboStep;local.attackStep=me.attackStep;
+    local.atkRecoveryTimer=me.atkRecoveryTimer;local.comboWindowTimer=me.comboWindowTimer;
+  }
+  if(me.action==='skill_e'){local.x=me.x;local.y=me.y;}
+
+  const dx=me.x-local.x,dy=me.y-local.y;
+  if(Math.abs(dx)>80)local.x=me.x; else local.x+=dx*0.2;
+  if(Math.abs(dy)>80){local.y=me.y;local.vy=me.vy;} else local.y+=dy*0.2;
+
+  const enemy=snap.players.find(p=>p.index!==myIndex);
+  if(enemy){eFrom=eTo?{x:eTo.x,y:eTo.y}:{x:enemy.x,y:enemy.y};eTo={...enemy};eT=0;}
+});
+
+// ─── 맵/캐릭터 선택 UI ─────────────────────────────────────────────────────
+function buildMapGrid(){
+  const grid=document.getElementById('mapGrid');
+  grid.innerHTML='';
+  MAPS_DATA.forEach(m=>{
+    const card=document.createElement('div');
+    card.className='map-card';
+    card.dataset.id=m.id;
+    card.innerHTML=`<div class="map-card-name">${m.name}</div><div class="map-card-tag">${MAP_TAGS[m.id]||''}</div>`;
+    card.addEventListener('click',()=>socket.emit('banMap',{mapId:m.id}));
+    grid.appendChild(card);
+  });
+}
+
+function buildCharGrid(){
+  const grid=document.getElementById('classGrid');
+  grid.innerHTML='';
+  CLASS_ORDER.forEach(cls=>{
+    const chars=CHARACTERS_DATA.filter(c=>c.class===cls);
+    if(!chars.length)return;
+    const section=document.createElement('div');
+    section.className='class-section';
+    section.innerHTML=`<div class="class-title">${CLASS_LABELS[cls]}</div>`;
+    const row=document.createElement('div'); row.className='class-row';
+    chars.forEach(c=>{
+      const card=document.createElement('div');
+      card.className='char-card';
+      card.dataset.id=c.id;
+      card.innerHTML=`<div class="char-avatar" style="background:${c.color}"></div><div class="char-name">${c.name}</div><div class="char-title">${c.title||''}</div>`;
+      card.addEventListener('click',()=>socket.emit('pickCharacter',{charId:c.id}));
+      row.appendChild(card);
+    });
+    section.appendChild(row);
+    grid.appendChild(section);
+  });
+}
+
+document.getElementById('readyBtn').addEventListener('click',()=>socket.emit('toggleReady'));
+
+function syncOverlays(snap){
+  const mapOv=document.getElementById('mapSelectOverlay');
+  const charOv=document.getElementById('charSelectOverlay');
+  mapOv.classList.toggle('hidden',snap.phase!=='map_select');
+  charOv.classList.toggle('hidden',snap.phase!=='char_select');
+
+  if(snap.phase==='map_select'&&myIndex>=0){
+    document.getElementById('mapTimer').textContent=`${Math.max(0,Math.ceil(snap.mapPick.timer/60))}초`;
+    const myBanned=snap.mapPick.bans[myIndex];
+    const oppBanned=snap.mapPick.bans[1-myIndex];
+    document.querySelectorAll('.map-card').forEach(el=>{
+      el.classList.toggle('picked-me',el.dataset.id===myBanned);
+      el.classList.toggle('disabled',!!myBanned&&el.dataset.id!==myBanned);
+    });
+    document.getElementById('mapStatus').textContent=
+      (myBanned?'내 밴 완료 ✓':'밴할 맵을 하나 선택하세요')+' · '+(oppBanned?'상대 밴 완료 ✓':'상대 선택 중...');
+  }
+
+  if(snap.phase==='char_select'&&myIndex>=0){
+    document.getElementById('csTimer').textContent=`${Math.max(0,Math.ceil(snap.charSelect.timer/60))}초`;
+    document.getElementById('csMapName').textContent=`맵: ${snap.map?snap.map.name:''}`;
+    const myPick=snap.charSelect.picks[myIndex];
+    const oppPick=snap.charSelect.picks[1-myIndex];
+    const myReady=snap.charSelect.ready[myIndex];
+    const oppReady=snap.charSelect.ready[1-myIndex];
+    document.querySelectorAll('.char-card').forEach(el=>{
+      el.classList.toggle('picked-me',el.dataset.id===myPick);
+    });
+    document.getElementById('csMyPick').textContent=myPick?`내 선택: ${charName(myPick)}`:'캐릭터를 선택하세요';
+    document.getElementById('csOppStatus').textContent=oppPick?(oppReady?'상대 준비 완료 ✓':'상대 선택 완료, 대기 중'):'상대 선택 중...';
+    const readyBtn=document.getElementById('readyBtn');
+    readyBtn.disabled=!myPick;
+    readyBtn.textContent=myReady?'준비 취소':'준비';
+    readyBtn.classList.toggle('ready',myReady);
+  }
+}
+
+// ─── Prediction ─────────────────────────────────────────────────────────────
+// 서버의 getGroundY()와 동일한 로직: 발판을 알아야 점프 후 착지가 서버와 일치한다.
+// (이 계산이 빠져 있던 것이 점프/착지 시 캐릭터가 위아래로 떨리던 원인이다)
+function getGroundYClient(x,prevY){
+  const map=gameState&&gameState.map;
+  if(!map)return FLOOR_Y;
+  let best=map.floorY||FLOOR_Y;
+  if(map.platforms){
+    for(const pl of map.platforms){
+      if(x>=pl.x1&&x<=pl.x2&&prevY<=pl.y+1&&pl.y<best)best=pl.y;
+    }
+  }
+  return best;
+}
+
+function predictLocal(){
+  if(!local||myIndex<0)return;
+  if(!gameState||gameState.phase!=='playing')return;
+  if(local.action==='dead')return;
+
+  if(local.actionTimer>0){
+    local.actionTimer--;
+    if(local.actionTimer===0&&local.action==='attack'){
+      // 평타 모션이 끝나면 콤보 회복시간(recovery)만큼 다음 평타까지 딜레이를 준다.
+      const cfg=COMBO_ATK[local.attackStep||0];
+      const isFinisher=(local.attackStep||0)===COMBO_ATK.length-1;
+      local.atkRecoveryTimer=isFinisher?COMBO_FINISHER_CD:cfg.recovery;
+      local.comboWindowTimer=isFinisher?0:(cfg.recovery+COMBO_CHAIN_GRACE);
+      local.comboStep=((local.attackStep||0)+1)%COMBO_ATK.length;
+    }
+  }
+  if((local.atkRecoveryTimer||0)>0)local.atkRecoveryTimer--;
+  if((local.comboWindowTimer||0)>0){
+    local.comboWindowTimer--;
+    if(local.comboWindowTimer===0&&local.action!=='attack')local.comboStep=0;
+  }
+  for(const k of['e','r','f','t'])if(local.cooldowns[k]>0)local.cooldowns[k]--;
+  if(local.invincible>0)local.invincible--;
+  if(local.trapped>0)local.trapped--;
+
+  const locked=(['attack','skill_e','skill_r','skill_f','skill_t','skill_x','hurt'].includes(local.action)
+               &&local.actionTimer>0)||local.trapped>0||local.action==='guard';
+  const mapW=gameState.map?gameState.map.width:W;
+  if(!locked){
+    let vx=0;
+    const spd=local.speed||6;
+    if(inp.left){vx=-spd;local.facing=-1;}
+    if(inp.right){vx=spd;local.facing=1;}
+    local.x=Math.max(26,Math.min(mapW-26,local.x+vx));
+    const je=inp.jump&&!prevJump;
+    if(je&&local.isGrounded){local.vy=JUMP_FORCE;local.isGrounded=false;}
+    if(local.actionTimer===0){
+      if(!local.isGrounded)local.action=local.vy<0?'jump':'fall';
+      else local.action=(inp.left||inp.right)?'run':'idle';
+    }
+  }
+  prevJump=inp.jump;
+  const prevY=local.y;
+  local.vy+=GRAVITY;local.y+=local.vy;
+  const groundY=getGroundYClient(local.x,prevY);
+  if(local.y>=groundY){local.y=groundY;local.vy=0;local.isGrounded=true;if(local.action==='jump'||local.action==='fall')local.action='idle';}
+  else local.isGrounded=false;
+}
+
+function getEnemyDisplay(){
+  if(!eTo)return null;if(!eFrom)return eTo;
+  eT=Math.min(1,eT+0.3);
+  return{...eTo,x:eFrom.x+(eTo.x-eFrom.x)*eT,y:eFrom.y+(eTo.y-eFrom.y)*eT};
+}
+
+function buildDisplay(){
+  if(!gameState)return null;
+  const players=gameState.players.map(p=>{
+    if(p.index===myIndex&&local)return{...p,
+      x:local.x,y:local.y,vy:local.vy,facing:local.facing,
+      action:local.action,actionTimer:local.actionTimer,isGrounded:local.isGrounded,
+      invincible:local.invincible,trapped:local.trapped,hp:local.hp,cooldowns:local.cooldowns,
+      comboStep:local.comboStep,attackStep:local.attackStep,
+      atkRecoveryTimer:local.atkRecoveryTimer,comboWindowTimer:local.comboWindowTimer,
+      ultGauge:local.ultGauge};
+    const ed=getEnemyDisplay();
+    if(ed&&p.index!==myIndex)return{...p,x:ed.x,y:ed.y};
+    return p;
+  });
+  return{...gameState,players};
+}
+
+function addShake(mag){if(mag>shakeMag)shakeMag=mag;}
+
+// ─── Drawing helpers ─────────────────────────────────────────────────────────
+function shade(hex,amt){
+  const n=parseInt(hex.slice(1),16);
+  let r=(n>>16)+amt,g=((n>>8)&255)+amt,b=(n&255)+amt;
+  r=Math.max(0,Math.min(255,r));g=Math.max(0,Math.min(255,g));b=Math.max(0,Math.min(255,b));
+  return '#'+r.toString(16).padStart(2,'0')+g.toString(16).padStart(2,'0')+b.toString(16).padStart(2,'0');
+}
+
+const MAP_THEMES={
+  colosseum:      {sky:['#241a12','#3a2a18'],ground:['#3a2a18','#1a120c'],line:'#8a6a38',deco:'#5a4428'},
+  frozen_canyon:  {sky:['#0a1830','#16304a'],ground:['#0e2035','#050d18'],line:'#5ab0e0',deco:'#3a6a90'},
+  volcanic_field: {sky:['#2a0a0a','#4a1808'],ground:['#3a1206','#150402'],line:'#ff6a30',deco:'#a03818'},
+  ruined_temple:  {sky:['#160c26','#2a1840'],ground:['#20122e','#0d0714'],line:'#9868d8',deco:'#5a3888'},
+  twilight_bridge:{sky:['#22122c','#4a2438'],ground:['#2a1420','#120a10'],line:'#c86858',deco:'#7a4048'}
+};
+
+function drawBg(map){
+  const mw=map?map.width:W;
+  const th=MAP_THEMES[map?map.id:'colosseum']||MAP_THEMES.colosseum;
+  const sky=ctx.createLinearGradient(0,0,0,FLOOR_Y);
+  sky.addColorStop(0,th.sky[0]);sky.addColorStop(1,th.sky[1]);
+  ctx.fillStyle=sky;ctx.fillRect(0,0,mw,FLOOR_Y);
+
+  ctx.fillStyle=th.deco;
+  for(let x=60;x<mw;x+=170){
+    ctx.globalAlpha=0.45;
+    ctx.fillRect(x-14,FLOOR_Y-190,28,190);
+    ctx.fillRect(x-22,FLOOR_Y-190,44,18);
+  }
+  ctx.globalAlpha=1;
+
+  const grd=ctx.createLinearGradient(0,FLOOR_Y,0,H);
+  grd.addColorStop(0,th.ground[0]);grd.addColorStop(1,th.ground[1]);
+  ctx.fillStyle=grd;ctx.fillRect(0,FLOOR_Y,mw,H-FLOOR_Y);
+  ctx.strokeStyle=th.line;ctx.lineWidth=2;
+  ctx.beginPath();ctx.moveTo(0,FLOOR_Y);ctx.lineTo(mw,FLOOR_Y);ctx.stroke();
+
+  if(map&&map.platforms){
+    for(const pl of map.platforms){
+      const pw=pl.x2-pl.x1;
+      ctx.globalAlpha=0.55;
+      ctx.fillStyle=th.deco;
+      ctx.fillRect(pl.x1+pw*0.5-6,pl.y+16,12,FLOOR_Y-(pl.y+16));
+      ctx.globalAlpha=1;
+      ctx.fillStyle=th.deco;
+      ctx.fillRect(pl.x1,pl.y,pw,16);
+      ctx.strokeStyle=th.line;ctx.lineWidth=2;
+      ctx.beginPath();ctx.moveTo(pl.x1,pl.y);ctx.lineTo(pl.x2,pl.y);ctx.stroke();
+    }
+  }
+}
+
+// 액션(스킬) 종류별 무기 동작 프로필 — 클래스가 같아도 스킬 성격(찌르기/베기/방출/큰 일격)에
+// 따라 실루엣이 달라지도록 한다. mode: swing(휘두르기) / thrust(찌르기) / guard(버티다 반격) / release(투사체 방출)
+const WEAPON_POSE = {
+  idle:    { mode: 'swing',   amt: 0    },
+  attack:  { mode: 'swing',   amt: 1    },
+  skill_e: { mode: 'release', amt: 1    },
+  skill_r: { mode: 'thrust',  amt: 1    },
+  skill_t: { mode: 'guard',   amt: 1    },
+  skill_f: { mode: 'swing',   amt: 1.9  },
+  skill_x: { mode: 'swing',   amt: 2.5  }
+};
+function drawJangyujunWeapon(p,f,active,swing,pose){
+  if(!p.transformed){
+    // 맨주먹: 무기 없이 주먹만 강조
+    const punch=active?swing*20*pose.amt:0;
+    ctx.save();ctx.translate(f*punch,0);
+    ctx.fillStyle='#ffe6c8';ctx.shadowColor='#ffb37a';ctx.shadowBlur=active?14*pose.amt:4;
+    ctx.beginPath();ctx.arc(0,-4,9,0,Math.PI*2);ctx.fill();
+    ctx.restore();
+  } else {
+    // 성검: 다리 사이에서 뽑아든 매우 긴 살구색 성검
+    ctx.rotate(f*(active?(-0.9+swing*1.6*pose.amt):0.15));
+    ctx.fillStyle='#ffcf9e';ctx.shadowColor='#ffb37a';ctx.shadowBlur=active?26*pose.amt:10;
+    ctx.fillRect(-4,-96,8,98);
+    ctx.fillStyle='#ffe6c8';ctx.beginPath();ctx.arc(0,-96,7,0,Math.PI*2);ctx.fill();
+    ctx.fillStyle='#7a4a28';ctx.fillRect(-11,-8,22,10);
+  }
+}
+function drawWeapon(p,cx,by,bodyH,col,dark,acc){
+  const f=p.facing;
+  const active=p.actionTimer>0&&['attack','skill_e','skill_r','skill_t','skill_f','skill_x'].includes(p.action);
+  const jyDur=p.charId==='saber_jangyujun'?jySkillDur(p.action,p.transformed):null;
+  const dur=p.action==='attack'?attackDur(p.attackStep||0):(jyDur||ATK_DUR[p.action]||10);
+  const swing=active?(1-p.actionTimer/dur):0;
+  const pose=active?(WEAPON_POSE[p.action]||WEAPON_POSE.attack):WEAPON_POSE.idle;
+  // guard 모드: 짧게 버티다가(자세 유지) 막판에 스냅으로 후려친다
+  const guardEase=swing<0.4?swing*0.25:Math.pow((swing-0.4)/0.6,0.55);
+  // thrust 모드: 찌르는 궤적(회전은 작게, 앞으로 쭉 내지르는 이동이 핵심)
+  const thrustPush=swing<0.5?swing*2:2-((swing-0.5)*2);
+  let extraFwd=0;
+  ctx.save();
+  ctx.translate(cx+f*(PLAYER_W*.4),by-bodyH*.75);
+  if(pose.mode==='thrust') extraFwd=f*thrustPush*(16*pose.amt);
+  if(pose.mode==='release') extraFwd=f*swing*(20*pose.amt);
+  ctx.translate(extraFwd,0);
+
+  function meleeAngle(swingAmt,baseNeg){
+    if(pose.mode==='guard') return f*(baseNeg*0.4+guardEase*swingAmt*pose.amt);
+    if(pose.mode==='thrust') return f*(baseNeg*0.35+thrustPush*0.18*pose.amt);
+    if(pose.mode==='release') return f*(baseNeg*0.2);
+    return f*(active?baseNeg+swing*swingAmt*pose.amt:0.15);
+  }
+
+  if(p.charId==='saber_jangyujun'){
+    drawJangyujunWeapon(p,f,active,swing,pose);
+    ctx.restore();
+    return;
+  }
+  switch(p.class){
+    case 'saber':
+      ctx.rotate(meleeAngle(1.6,-0.9));
+      ctx.fillStyle='#dfe8f5';ctx.shadowColor=col;ctx.shadowBlur=active?20*pose.amt:6;
+      ctx.fillRect(-3,-58,6,58);
+      ctx.fillStyle=col;ctx.fillRect(-9,-6,18,8);
+      break;
+    case 'lancer':
+      ctx.rotate(meleeAngle(0.5,-0.3));
+      ctx.fillStyle=dark;ctx.shadowColor=col;ctx.shadowBlur=active?18*pose.amt:5;
+      ctx.fillRect(-3,-90,6,92);
+      ctx.beginPath();ctx.moveTo(-8,-90);ctx.lineTo(0,-108);ctx.lineTo(8,-90);ctx.fillStyle=acc;ctx.fill();
+      break;
+    case 'archer':{
+      ctx.strokeStyle=col;ctx.lineWidth=4;ctx.shadowColor=col;ctx.shadowBlur=active?18:6;
+      ctx.beginPath();ctx.arc(0,0,34,-Math.PI/2,Math.PI/2,f<0);ctx.stroke();
+      ctx.strokeStyle=acc;ctx.lineWidth=1.5;
+      // 회피성 스킬(skill_r)은 활을 당기지 않고 몸을 사린다; 관통/포박형(skill_t)은 끝까지 당겨 오래 조준한다
+      let pull=0;
+      if(active){
+        if(p.action==='skill_r') pull=2;
+        else if(p.action==='skill_t') pull=Math.min(1,swing*1.6)*16;
+        else pull=swing*14;
+      }
+      ctx.beginPath();ctx.moveTo(0,-34);ctx.lineTo(-pull,0);ctx.lineTo(0,34);ctx.stroke();
+      break;}
+    case 'berserker':
+      ctx.rotate(meleeAngle(1.8,-1.1));
+      ctx.fillStyle=dark;ctx.shadowColor=col;ctx.shadowBlur=active?20*pose.amt:6;
+      ctx.fillRect(-4,-60,8,60);
+      ctx.fillStyle=col;ctx.beginPath();ctx.arc(0,-64,16,0,Math.PI*2);ctx.fill();
+      break;
+    case 'caster':{
+      // 스킬 성격에 따라 지팡이를 드는 방향이 달라진다: 방출(skill_e/f)은 높이 치켜들고, 순간이동(r)은 몸쪽으로 당기고, 결계(t)는 지면을 향해 내리찍는다
+      let tilt=f*0.1, orbY=-74, boost=0;
+      if(active){
+        if(p.action==='skill_r'){ tilt=f*(0.1-swing*0.5); boost=10; }
+        else if(p.action==='skill_t'){ tilt=f*(0.1+swing*0.9); orbY=-74+swing*40; boost=16; }
+        else if(pose.mode==='swing'||pose.mode==='release'){ tilt=f*(0.1-swing*0.7*pose.amt); boost=14*pose.amt; }
+      }
+      ctx.rotate(tilt);
+      ctx.fillStyle=dark;ctx.fillRect(-3,-70,6,70);
+      const pulse=0.6+Math.sin(Date.now()/150)*0.4;
+      ctx.fillStyle=col;ctx.shadowColor=col;ctx.shadowBlur=18*pulse+boost;
+      ctx.beginPath();ctx.arc(0,orbY,10,0,Math.PI*2);ctx.fill();
+      break;}
+    case 'rider':
+      ctx.rotate(meleeAngle(0.7,-0.4));
+      ctx.fillStyle=dark;ctx.shadowColor=col;ctx.shadowBlur=active?18*pose.amt:5;
+      ctx.fillRect(-3,-80,6,82);
+      ctx.beginPath();ctx.moveTo(-7,-80);ctx.lineTo(0,-96);ctx.lineTo(7,-80);ctx.fillStyle=acc;ctx.fill();
+      break;
+    case 'assassin':{
+      const sw=meleeAngle(1.2,-0.6)/f; // f로 다시 나눠 순수 각도값 확보(아래서 f를 다시 곱함)
+      // guard/thrust 모드에서는 두 단검을 교차시켜 방어적인 자세를 표현
+      const cross=(pose.mode==='guard'||pose.mode==='thrust')&&active;
+      ctx.save();ctx.rotate(f*sw*(cross?-0.6:1));
+      ctx.fillStyle=acc;ctx.shadowColor=col;ctx.shadowBlur=active?16*pose.amt:4;
+      ctx.fillRect(-2,-30,4,30);
+      ctx.restore();
+      ctx.save();ctx.translate(-f*10,6);ctx.rotate(f*sw*(cross?0.9:0.8));
+      ctx.fillStyle=acc;ctx.fillRect(-2,-26,4,26);
+      ctx.restore();
+      break;}
+  }
+  ctx.restore();
+}
+
+// ─── 캐릭터별 복장/장식 (역사·신화 속 인물의 개성을 표현) ─────────────────────
+function drawOutfit(p,cx,headY,headR,bodyTop,acc,dark){
+  const def=charDef(p.charId);
+  const outfit=def&&def.outfit;
+  if(!outfit)return;
+  ctx.save();
+  switch(outfit){
+    case 'arthur': // 아서 펜드래곤 - 황금 왕관
+      ctx.fillStyle='#f2d675';ctx.shadowColor='#f7e9a0';ctx.shadowBlur=8;
+      ctx.beginPath();
+      ctx.moveTo(cx-headR*.95,headY-headR*.35);
+      for(let i=0;i<5;i++){const xx=cx-headR*.95+headR*1.9*i/4,yy=headY-headR*(i%2?.95:.35);ctx.lineTo(xx,yy);}
+      ctx.lineTo(cx+headR*.95,headY-headR*.35);ctx.closePath();ctx.fill();
+      ctx.fillStyle='#e8f0ff';ctx.beginPath();ctx.arc(cx,headY-headR*.9,3,0,Math.PI*2);ctx.fill();
+      break;
+    case 'ragnar': // 라그나르 로드브로크 - 모피 망토 + 땋은 수염
+      ctx.fillStyle='#7a5636';ctx.shadowColor='#5a3f22';ctx.shadowBlur=5;
+      ctx.beginPath();ctx.arc(cx,headY,headR*1.28,0,Math.PI*2);ctx.fill();
+      ctx.fillStyle='#c8a874';
+      ctx.beginPath();ctx.moveTo(cx-headR*.4,headY+headR*.5);ctx.lineTo(cx-headR*.18,headY+headR*1.55);ctx.lineTo(cx,headY+headR*.75);ctx.lineTo(cx+headR*.18,headY+headR*1.55);ctx.lineTo(cx+headR*.4,headY+headR*.5);ctx.closePath();ctx.fill();
+      break;
+    case 'circe': // 키르케 - 마녀의 화관
+      ctx.strokeStyle='#8fd15a';ctx.lineWidth=3;ctx.shadowColor='#c86edc';ctx.shadowBlur=8;
+      ctx.beginPath();ctx.arc(cx,headY,headR*1.05,Math.PI*1.1,Math.PI*1.9);ctx.stroke();
+      ctx.fillStyle='#c86edc';
+      for(let i=0;i<3;i++){ctx.beginPath();ctx.arc(cx-headR*.6+headR*.6*i,headY-headR*.9,3,0,Math.PI*2);ctx.fill();}
+      break;
+    case 'khan': // 칭기즈칸 - 몽골 전립
+      ctx.fillStyle='#334455';ctx.shadowColor='#7799ff';ctx.shadowBlur=6;
+      ctx.beginPath();ctx.ellipse(cx,headY-headR*.8,headR*1.3,headR*.35,0,0,Math.PI*2);ctx.fill();
+      ctx.beginPath();ctx.arc(cx,headY-headR*1.0,headR*.6,Math.PI,Math.PI*2);ctx.fill();
+      ctx.fillStyle='#8a5c34';ctx.fillRect(cx-headR*1.2,headY-headR*.55,headR*.5,headR*.5);
+      ctx.fillRect(cx+headR*.7,headY-headR*.55,headR*.5,headR*.5);
+      break;
+    case 'jingke': // 형가 - 자객의 두건
+      ctx.fillStyle='#1c1620';ctx.shadowColor='#000';ctx.shadowBlur=4;
+      ctx.beginPath();ctx.arc(cx,headY,headR*1.05,Math.PI*1.0,Math.PI*2.0);ctx.fill();
+      ctx.fillStyle='#883344';ctx.fillRect(cx-headR*.8,headY+headR*.15,headR*1.6,headR*.4);
+      break;
+    case 'musashi': // 미야모토 무사시 - 하치마키(머리띠)
+      ctx.fillStyle='#e8e0d0';
+      ctx.fillRect(cx-headR*.95,headY-headR*.25,headR*1.9,7);
+      ctx.beginPath();ctx.moveTo(cx-p.facing*headR*.9,headY-headR*.22);ctx.lineTo(cx-p.facing*headR*1.5,headY+headR*.1);ctx.lineTo(cx-p.facing*headR*1.3,headY+headR*.35);ctx.closePath();ctx.fill();
+      break;
+    case 'guanyu': // 관우 - 녹색 두건 + 긴 수염
+      ctx.fillStyle='#1f8a4c';
+      ctx.beginPath();ctx.arc(cx,headY-headR*.2,headR*1.02,Math.PI*1.02,Math.PI*1.98);ctx.fill();
+      ctx.fillStyle='#2a1a10';
+      ctx.beginPath();ctx.moveTo(cx-headR*.55,headY+headR*.5);ctx.lineTo(cx,headY+headR*1.7);ctx.lineTo(cx+headR*.55,headY+headR*.5);ctx.closePath();ctx.fill();
+      break;
+    case 'achilles': // 아킬레우스 - 코린트식 투구, 말총 볏
+      ctx.fillStyle='#c9d3dc';ctx.shadowColor='#aab6c2';ctx.shadowBlur=6;
+      ctx.beginPath();ctx.arc(cx,headY-headR*.1,headR*1.08,Math.PI*1.0,Math.PI*2.0);ctx.fill();
+      ctx.fillStyle='#cc3322';
+      ctx.beginPath();ctx.ellipse(cx,headY-headR*1.25,headR*.14,headR*.9,0,0,Math.PI*2);ctx.fill();
+      break;
+    case 'artemis': // 아르테미스 - 초승달 서클릿
+      ctx.strokeStyle='#e8f0d8';ctx.lineWidth=3;ctx.shadowColor='#c8f0a0';ctx.shadowBlur=8;
+      ctx.beginPath();ctx.arc(cx,headY,headR*1.02,Math.PI*1.15,Math.PI*1.85);ctx.stroke();
+      ctx.fillStyle='#eaffcc';
+      ctx.beginPath();ctx.arc(cx-p.facing*headR*.1,headY-headR*1.05,4,0,Math.PI*2);ctx.fill();
+      break;
+    case 'jumong': // 주몽 - 모피 사냥 모자
+      ctx.fillStyle='#6a4526';
+      ctx.beginPath();ctx.arc(cx,headY-headR*.1,headR*1.12,Math.PI*.95,Math.PI*2.05);ctx.fill();
+      ctx.fillStyle='#8a5c34';
+      ctx.fillRect(cx-headR*1.05,headY-headR*.1,10,headR*.9);
+      ctx.fillRect(cx+headR*1.05-10,headY-headR*.1,10,headR*.9);
+      break;
+    case 'hercules': // 헤라클레스 - 네메아 사자 가죽
+      ctx.fillStyle='#a8783c';ctx.shadowColor='#8a5a20';ctx.shadowBlur=6;
+      ctx.beginPath();ctx.arc(cx,headY,headR*1.35,0,Math.PI*2);ctx.fill();
+      ctx.fillStyle=dark;
+      ctx.beginPath();ctx.ellipse(cx,headY,headR*.92,headR*.98,0,0,Math.PI*2);ctx.fill();
+      ctx.fillStyle='#a8783c';
+      ctx.beginPath();ctx.arc(cx-headR*.9,headY-headR*.9,headR*.35,0,Math.PI*2);ctx.fill();
+      ctx.beginPath();ctx.arc(cx+headR*.9,headY-headR*.9,headR*.35,0,Math.PI*2);ctx.fill();
+      break;
+    case 'merlin': // 멀린 - 뾰족한 마법사 모자 + 흰 수염
+      ctx.fillStyle='#3a2a5a';ctx.shadowColor='#6a4aa0';ctx.shadowBlur=6;
+      ctx.beginPath();
+      ctx.moveTo(cx-headR*1.1,headY-headR*.6);
+      ctx.lineTo(cx+p.facing*headR*.3,headY-headR*2.6);
+      ctx.lineTo(cx+headR*1.1,headY-headR*.6);
+      ctx.closePath();ctx.fill();
+      ctx.fillStyle='#eee';
+      ctx.beginPath();ctx.moveTo(cx-headR*.5,headY+headR*.4);ctx.lineTo(cx,headY+headR*1.6);ctx.lineTo(cx+headR*.5,headY+headR*.4);ctx.closePath();ctx.fill();
+      break;
+    case 'yisunsin': // 이순신 - 장군의 전립 + 어깨 갑주
+      ctx.fillStyle='#20242c';ctx.shadowColor='#000';ctx.shadowBlur=4;
+      ctx.beginPath();ctx.ellipse(cx,headY-headR*.85,headR*1.5,headR*.4,0,0,Math.PI*2);ctx.fill();
+      ctx.beginPath();ctx.arc(cx,headY-headR*1.15,headR*.7,Math.PI,Math.PI*2);ctx.fill();
+      ctx.fillStyle='#cc2222';
+      ctx.beginPath();ctx.moveTo(cx,headY-headR*1.8);ctx.lineTo(cx-6,headY-headR*1.15);ctx.lineTo(cx+6,headY-headR*1.15);ctx.closePath();ctx.fill();
+      ctx.fillStyle=acc;
+      ctx.beginPath();ctx.arc(cx-headR*1.4,bodyTop+6,7,0,Math.PI*2);ctx.fill();
+      ctx.beginPath();ctx.arc(cx+headR*1.4,bodyTop+6,7,0,Math.PI*2);ctx.fill();
+      break;
+    case 'hanzo': // 핫토리 한조 - 닌자 두건 + 마스크
+      ctx.fillStyle='#1a1a22';
+      ctx.beginPath();ctx.arc(cx,headY,headR*1.08,Math.PI*1.0,Math.PI*2.0);ctx.fill();
+      ctx.fillRect(cx-headR*.9,headY+headR*.1,headR*1.8,headR*.55);
+      break;
+    case 'jangyujun': // 장유준 - 맨주먹 파이터의 머리띠
+      ctx.fillStyle='#ffe6c8';ctx.shadowColor='#ffb37a';ctx.shadowBlur=6;
+      ctx.fillRect(cx-headR*.95,headY-headR*.35,headR*1.9,6);
+      ctx.beginPath();ctx.moveTo(cx-p.facing*headR*.9,headY-headR*.3);ctx.lineTo(cx-p.facing*headR*1.4,headY+headR*.05);ctx.lineTo(cx-p.facing*headR*1.2,headY+headR*.3);ctx.closePath();ctx.fill();
+      break;
+    case 'ph': // PH - 마술사의 실크 모자 + 카드 문양
+      ctx.fillStyle='#1c1620';ctx.shadowColor='#f0b93a';ctx.shadowBlur=6;
+      ctx.fillRect(cx-headR*.95,headY-headR*.55,headR*1.9,headR*.3);
+      ctx.fillRect(cx-headR*.62,headY-headR*1.7,headR*1.24,headR*1.2);
+      ctx.fillStyle='#d9455f';ctx.fillRect(cx-headR*.62,headY-headR*1.0,headR*1.24,headR*.22);
+      break;
+  }
+  ctx.restore();
+}
+
+function drawPlayer(p,isMe){
+  const cx=p.x,by=p.y;
+  const vuln=p.dmgVulnTimer>0&&p.action!=='dead';
+  const origCol=p.color||'#3399ff';
+  const col=vuln?'#d8b48a':origCol;
+  const dark=vuln?shade(col,-70):shade(col,-80),acc=vuln?shade(col,50):shade(col,90);
+  const dead=p.action==='dead',hurt=p.action==='hurt';
+
+  ctx.save();
+  if(hurt&&Math.floor(Date.now()/60)%2===0)ctx.globalAlpha=0.5;
+  if(dead){ctx.globalAlpha=0.4;ctx.translate(cx,by);ctx.rotate(p.facing*.8);ctx.translate(-cx,-by);}
+
+  if(p.trapped>0){
+    ctx.save();
+    const pulse2=Math.sin(Date.now()/120)*0.15+0.85;
+    ctx.strokeStyle='#aa44ff';ctx.shadowColor='#aa44ff';ctx.shadowBlur=20*pulse2;ctx.lineWidth=2.5;
+    const cW=PLAYER_W*1.6,cH=PLAYER_H*1.25,cX=cx-cW/2,cY=by-cH;
+    ctx.strokeRect(cX,cY,cW,cH);
+    for(let i=1;i<=3;i++){ctx.beginPath();ctx.moveTo(cX,cY+cH*i/4);ctx.lineTo(cX+cW,cY+cH*i/4);ctx.stroke();}
+    ctx.restore();
+  }
+
+  const bodyH=PLAYER_H*.55,headR=PLAYER_W*.45;
+  const bodyTop=by-bodyH,headCy=bodyTop-headR;
+  const jumpOff=p.isGrounded?0:-4;
+  const runOff=p.action==='run'?Math.sin(Date.now()/80)*4:0;
+
+  // Legs
+  ctx.fillStyle=dark;ctx.shadowBlur=0;
+  ctx.beginPath();ctx.roundRect(cx-PLAYER_W*.3,by-PLAYER_H*.3+runOff,PLAYER_W*.28,PLAYER_H*.3,4);ctx.fill();
+  ctx.beginPath();ctx.roundRect(cx+PLAYER_W*.02,by-PLAYER_H*.3-runOff,PLAYER_W*.28,PLAYER_H*.3,4);ctx.fill();
+
+  // Body
+  const bg=ctx.createLinearGradient(cx-PLAYER_W*.5,0,cx+PLAYER_W*.5,0);
+  bg.addColorStop(0,dark);bg.addColorStop(.5,col);bg.addColorStop(1,dark);
+  ctx.fillStyle=bg;ctx.beginPath();ctx.roundRect(cx-PLAYER_W*.5,bodyTop,PLAYER_W,bodyH,[4,4,2,2]);ctx.fill();
+  ctx.fillStyle=acc+'aa';ctx.beginPath();ctx.arc(cx,bodyTop+bodyH*.35,6,0,Math.PI*2);ctx.fill();
+
+  // Arms
+  const aTop=bodyTop+6,aH=PLAYER_H*.25;
+  const busy=['attack','skill_e','skill_r','skill_t','skill_f','skill_x'].includes(p.action)&&p.actionTimer>0;
+  const aExt=busy?p.facing*24:0;
+  ctx.fillStyle=dark;ctx.beginPath();ctx.roundRect(cx-p.facing*(PLAYER_W*.55),aTop,10,aH,3);ctx.fill();
+  ctx.fillStyle=col;ctx.shadowColor=col;ctx.shadowBlur=8;
+  ctx.beginPath();ctx.roundRect(cx+p.facing*(PLAYER_W*.38)+aExt,aTop,10,aH,3);ctx.fill();
+  ctx.shadowBlur=0;
+
+  drawWeapon(p,cx,by,bodyH,origCol,dark,acc);
+
+  // Head
+  ctx.shadowColor=col;ctx.shadowBlur=12;
+  const hg=ctx.createRadialGradient(cx-p.facing*4,headCy-3,2,cx,headCy,headR);
+  hg.addColorStop(0,acc);hg.addColorStop(1,col);
+  ctx.fillStyle=hg;ctx.beginPath();ctx.arc(cx,headCy+jumpOff,headR,0,Math.PI*2);ctx.fill();
+  ctx.shadowBlur=0;
+  ctx.fillStyle=dead?'#333':'#fff';
+  const ex=cx+p.facing*headR*.35,ey=headCy-headR*.1+jumpOff;
+  ctx.beginPath();ctx.ellipse(ex,ey,5,dead?2:5,0,0,Math.PI*2);ctx.fill();
+  if(!dead){ctx.fillStyle=dark;ctx.beginPath();ctx.arc(ex+p.facing*1.5,ey,3,0,Math.PI*2);ctx.fill();}
+  if(!dead&&!vuln)drawOutfit(p,cx,headCy+jumpOff,headR,bodyTop,acc,dark);
+
+  // Mini name tag
+  const bw=70,bh=8,bx=cx-35,bary=headCy-headR-20+jumpOff;
+  ctx.font='bold 11px Arial';ctx.fillStyle=origCol;ctx.textAlign='center';
+  ctx.fillText(charName(p.charId)+(isMe?' ◀':''),cx,bary-4);
+
+  if(p.dmgVulnTimer>0&&!dead){
+    const pulse=0.6+Math.sin(Date.now()/100)*0.4;
+    ctx.font='bold 10px Arial';ctx.fillStyle=`rgba(255,90,90,${pulse})`;ctx.textAlign='center';
+    ctx.fillText('취약(피해 2배)',cx,bary-16);
+  }
+  if(p.poison&&!dead){
+    const pulse=0.5+Math.sin(Date.now()/90)*0.4;
+    ctx.font='bold 10px Arial';ctx.fillStyle=`rgba(95,212,95,${pulse})`;ctx.textAlign='center';
+    ctx.fillText('중독',cx,bary-16);
+    ctx.fillStyle=`rgba(95,212,95,${0.35+pulse*0.2})`;
+    for(let i=0;i<2;i++){const dx=(i-0.5)*14,dy=(Date.now()/300+i)%1*bodyH;ctx.beginPath();ctx.arc(cx+dx,bodyTop+dy,2.4,0,Math.PI*2);ctx.fill();}
+  }
+  if(p.action==='guard'&&!dead){
+    const just=p.guardTimer<=JUST_GUARD_WINDOW;
+    const col2=just?'#ffe066':'#8be0ff';
+    const pulse=0.7+Math.sin(Date.now()/90)*0.3;
+    ctx.save();
+    ctx.strokeStyle=col2;ctx.lineWidth=3;ctx.shadowColor=col2;ctx.shadowBlur=just?22*pulse:12;
+    const sx=cx+p.facing*(PLAYER_W*0.55),sy=by-bodyH*0.55;
+    ctx.beginPath();ctx.ellipse(sx,sy,10,22,0,0,Math.PI*2);ctx.stroke();
+    ctx.fillStyle=col2+'33';ctx.fill();
+    ctx.restore();
+    if(just){
+      ctx.font='bold 10px Arial';ctx.fillStyle=col2;ctx.textAlign='center';
+      ctx.fillText('저스트가드',cx,bary-16);
+    }
+  }
+  if(p.action==='stunned'&&!dead){
+    ctx.font='bold 10px Arial';ctx.fillStyle='#ffe066';ctx.textAlign='center';
+    ctx.fillText('기절',cx,bary-16);
+    const sR=18;
+    for(let i=0;i<3;i++){
+      const a=Date.now()/160+(i/3)*Math.PI*2;
+      const sx=cx+Math.cos(a)*sR,sy=(bary-6)+Math.sin(a)*sR*0.4;
+      ctx.save();ctx.font='13px Arial';ctx.fillStyle='#ffe066';ctx.shadowColor='#ffe066';ctx.shadowBlur=8;
+      ctx.fillText('★',sx,sy);ctx.restore();
+    }
+  }
+  if(p.speedBuffTimer>0&&!dead){
+    ctx.strokeStyle='#8be08b';ctx.lineWidth=2;ctx.shadowColor='#8be08b';ctx.shadowBlur=10;
+    for(let i=0;i<3;i++){
+      const off=(Date.now()/30+i*26)%36;
+      ctx.globalAlpha=0.5*(1-off/36);
+      ctx.beginPath();ctx.moveTo(cx-p.facing*(18+off),by-14+i*10);ctx.lineTo(cx-p.facing*(6+off),by-14+i*10);ctx.stroke();
+    }
+    ctx.globalAlpha=1;
+  }
+
+  ctx.restore();
+
+  if(p.invincible>0&&!dead){
+    ctx.save();
+    ctx.globalAlpha=0.35+Math.sin(Date.now()/80)*0.15;
+    ctx.strokeStyle='#fff';ctx.lineWidth=2;
+    ctx.beginPath();ctx.ellipse(cx,by-bodyH*.5,PLAYER_W*.7,PLAYER_H*.55,0,0,Math.PI*2);ctx.stroke();
+    ctx.restore();
+  }
+}
+
+function drawProjectile(proj){
+  ctx.save();
+  if(proj.spawnDelay>0){
+    ctx.globalAlpha=0.5+Math.sin(Date.now()/100+proj.x)*0.3;
+    ctx.shadowColor='#f0c040';ctx.shadowBlur=20;
+    ctx.fillStyle='#f0c040';
+    ctx.translate(proj.x,proj.y);
+    ctx.rotate(Math.PI/4);
+    ctx.fillRect(-3,-16,6,32);
+    ctx.fillRect(-10,-2,20,4);
+    ctx.restore();return;
+  }
+
+  if(proj.type==='dagger'){
+    const angle=Math.atan2(proj.vy,proj.vx);
+    ctx.translate(proj.x,proj.y);ctx.rotate(angle);
+    ctx.shadowColor='#ccddee';ctx.shadowBlur=10;
+    ctx.fillStyle='#e0eeff';ctx.fillRect(-16,-3,32,6);
+    ctx.fillStyle='#f0c040';ctx.fillRect(-16,-2,6,4);
+    ctx.fillStyle='#fff';ctx.fillRect(12,-1.5,5,3);
+
+  } else if(proj.type==='spear'){
+    const angle=Math.atan2(proj.vy,proj.vx);
+    ctx.translate(proj.x,proj.y);ctx.rotate(angle);
+    ctx.shadowColor='#ff4422';ctx.shadowBlur=16;
+    ctx.fillStyle='#cc3311';ctx.fillRect(-18,-4,36,8);
+    ctx.fillStyle='#ff8844';ctx.beginPath();ctx.moveTo(18,-4);ctx.lineTo(28,0);ctx.lineTo(18,4);ctx.fill();
+    ctx.fillStyle='#8b5a2b';ctx.fillRect(-18,-3,8,6);
+
+  } else if(proj.type==='sword_wave'){
+    const angle=Math.atan2(proj.vy,proj.vx);
+    ctx.translate(proj.x,proj.y);ctx.rotate(angle);
+    ctx.shadowColor='#bcd8ff';ctx.shadowBlur=16;
+    ctx.strokeStyle='#eaf4ff';ctx.lineWidth=5;
+    ctx.beginPath();ctx.arc(0,0,16,-0.9,0.9);ctx.stroke();
+    ctx.fillStyle='#eaf4ff55';
+    ctx.beginPath();ctx.arc(0,0,16,-0.9,0.9);ctx.lineTo(0,0);ctx.fill();
+
+  } else if(proj.type==='shard'){
+    const angle=Math.atan2(proj.vy,proj.vx);
+    ctx.translate(proj.x,proj.y);ctx.rotate(angle);
+    ctx.shadowColor='#ffb088';ctx.shadowBlur=10;
+    ctx.fillStyle='#ffcaa8';
+    ctx.beginPath();ctx.moveTo(-10,0);ctx.lineTo(10,-4);ctx.lineTo(10,4);ctx.fill();
+
+  } else if(proj.type==='boulder'){
+    ctx.shadowColor='#aa4422';ctx.shadowBlur=12;
+    ctx.fillStyle='#7a4020';
+    ctx.beginPath();ctx.arc(proj.x,proj.y,13,0,Math.PI*2);ctx.fill();
+    ctx.strokeStyle='#3a1e10';ctx.lineWidth=2;
+    ctx.beginPath();ctx.moveTo(proj.x-6,proj.y-4);ctx.lineTo(proj.x+2,proj.y+3);ctx.stroke();
+
+  } else if(proj.type==='bolt'){
+    ctx.shadowColor='#ff88ee';ctx.shadowBlur=16;
+    const g=ctx.createRadialGradient(proj.x,proj.y,1,proj.x,proj.y,12);
+    g.addColorStop(0,'#fff');g.addColorStop(.5,'#cc66ff');g.addColorStop(1,'#cc66ff00');
+    ctx.fillStyle=g;ctx.beginPath();ctx.arc(proj.x,proj.y,12,0,Math.PI*2);ctx.fill();
+
+  } else if(proj.type==='orb'){
+    const pulse=0.7+Math.sin(Date.now()/90)*0.3;
+    ctx.shadowColor='#aa55ff';ctx.shadowBlur=20*pulse;
+    const g=ctx.createRadialGradient(proj.x,proj.y,1,proj.x,proj.y,14);
+    g.addColorStop(0,'#fff');g.addColorStop(.5,'#aa55ff');g.addColorStop(1,'#aa55ff00');
+    ctx.fillStyle=g;ctx.beginPath();ctx.arc(proj.x,proj.y,14,0,Math.PI*2);ctx.fill();
+
+  } else if(proj.type==='meteor'){
+    ctx.shadowColor='#ff6622';ctx.shadowBlur=18;
+    const g=ctx.createRadialGradient(proj.x,proj.y,1,proj.x,proj.y,13);
+    g.addColorStop(0,'#fff');g.addColorStop(.4,'#ff8822');g.addColorStop(1,'#ff222200');
+    ctx.fillStyle=g;ctx.beginPath();ctx.arc(proj.x,proj.y,13,0,Math.PI*2);ctx.fill();
+
+  } else if(proj.type==='javelin'){
+    const angle=Math.atan2(proj.vy,proj.vx);
+    ctx.translate(proj.x,proj.y);ctx.rotate(angle);
+    ctx.shadowColor='#ffcc66';ctx.shadowBlur=12;
+    ctx.fillStyle='#7a5a2a';ctx.fillRect(-16,-2,32,4);
+    ctx.fillStyle='#ffcc66';ctx.beginPath();ctx.moveTo(16,-5);ctx.lineTo(26,0);ctx.lineTo(16,5);ctx.fill();
+
+  } else if(proj.type==='arrow'){
+    const angle=Math.atan2(proj.vy,proj.vx);
+    ctx.translate(proj.x,proj.y);ctx.rotate(angle);
+    ctx.shadowColor='#4488ff';ctx.shadowBlur=12;
+    ctx.strokeStyle='#88aaff';ctx.lineWidth=3;
+    ctx.beginPath();ctx.moveTo(-14,0);ctx.lineTo(14,0);ctx.stroke();
+    ctx.fillStyle='#4488ff';ctx.beginPath();ctx.moveTo(14,-4);ctx.lineTo(22,0);ctx.lineTo(14,4);ctx.fill();
+
+  } else if(proj.type==='charged_arrow'){
+    const angle=Math.atan2(proj.vy,proj.vx);
+    ctx.translate(proj.x,proj.y);ctx.rotate(angle);
+    ctx.shadowColor='#f0c040';ctx.shadowBlur=30;
+    ctx.strokeStyle='#f0c040';ctx.lineWidth=4;
+    ctx.beginPath();ctx.moveTo(-20,0);ctx.lineTo(20,0);ctx.stroke();
+    ctx.fillStyle='#ffe080';ctx.beginPath();ctx.moveTo(20,-6);ctx.lineTo(32,0);ctx.lineTo(20,6);ctx.fill();
+
+  } else if(proj.type==='dragon_crescent'){
+    const angle=Math.atan2(proj.vy,proj.vx);
+    ctx.translate(proj.x,proj.y);ctx.rotate(angle);
+    ctx.shadowColor='#33cc66';ctx.shadowBlur=20;
+    ctx.strokeStyle='#7fffa0';ctx.lineWidth=6;
+    ctx.beginPath();ctx.arc(0,0,20,-1.1,1.1);ctx.stroke();
+    ctx.fillStyle='#33cc6655';ctx.beginPath();ctx.arc(0,0,20,-1.1,1.1);ctx.lineTo(0,0);ctx.fill();
+
+  } else if(proj.type==='giant_arrow'){
+    const angle=Math.atan2(proj.vy,proj.vx);
+    ctx.translate(proj.x,proj.y);ctx.rotate(angle);
+    ctx.shadowColor='#66ffaa';ctx.shadowBlur=34;
+    ctx.strokeStyle='#aaffcc';ctx.lineWidth=6;
+    ctx.beginPath();ctx.moveTo(-34,0);ctx.lineTo(34,0);ctx.stroke();
+    ctx.fillStyle='#eaffcc';ctx.beginPath();ctx.moveTo(34,-10);ctx.lineTo(50,0);ctx.lineTo(34,10);ctx.fill();
+
+  } else if(proj.type==='moon_arrow'){
+    ctx.shadowColor='#dff0ff';ctx.shadowBlur=18;
+    ctx.fillStyle='#eaf6ff';
+    ctx.beginPath();ctx.arc(proj.x,proj.y,4,0,Math.PI*2);ctx.fill();
+    ctx.strokeStyle='#bcdfff';ctx.lineWidth=2;
+    ctx.beginPath();ctx.moveTo(proj.x,proj.y-10);ctx.lineTo(proj.x,proj.y+22);ctx.stroke();
+
+  } else if(proj.type==='excalibur_wave'){
+    const angle=Math.atan2(proj.vy,proj.vx);
+    ctx.translate(proj.x,proj.y);ctx.rotate(angle);
+    ctx.shadowColor='#f2d675';ctx.shadowBlur=32;
+    ctx.strokeStyle='#fff8dd';ctx.lineWidth=8;
+    ctx.beginPath();ctx.arc(0,0,30,-1.0,1.0);ctx.stroke();
+    ctx.fillStyle='#f2d67555';
+    ctx.beginPath();ctx.arc(0,0,30,-1.0,1.0);ctx.lineTo(0,0);ctx.fill();
+
+  } else if(proj.type==='ph_card'){
+    const angle=Math.atan2(proj.vy,proj.vx);
+    ctx.translate(proj.x,proj.y);ctx.rotate(angle);
+    ctx.shadowColor='#f0b93a';ctx.shadowBlur=12;
+    ctx.fillStyle='#fff8ea';ctx.fillRect(-9,-13,18,26);
+    ctx.strokeStyle='#f0b93a';ctx.lineWidth=1.5;ctx.strokeRect(-9,-13,18,26);
+    ctx.fillStyle='#d9455f';ctx.beginPath();ctx.arc(0,0,4,0,Math.PI*2);ctx.fill();
+
+  } else if(proj.type==='poison_dart'){
+    const angle=Math.atan2(proj.vy,proj.vx);
+    ctx.translate(proj.x,proj.y);ctx.rotate(angle);
+    ctx.shadowColor='#5fd45f';ctx.shadowBlur=14;
+    ctx.fillStyle='#2f6b2f';ctx.fillRect(-14,-2.5,26,5);
+    ctx.fillStyle='#8be08b';ctx.beginPath();ctx.moveTo(12,-4);ctx.lineTo(20,0);ctx.lineTo(12,4);ctx.fill();
+    ctx.fillStyle='#3a3a3a';ctx.fillRect(-14,-1.5,6,3);
+    ctx.globalAlpha=0.6;ctx.fillStyle='#5fd45f';
+    ctx.beginPath();ctx.arc(-16,0,3+Math.sin(Date.now()/60)*1,0,Math.PI*2);ctx.fill();
+
+  } else if(proj.type==='jy_beam'){ // 싸기: 허리에서 나가는 하얀 포물선 레이저
+    const angle=Math.atan2(proj.vy,proj.vx);
+    ctx.translate(proj.x,proj.y);ctx.rotate(angle);
+    ctx.shadowColor='#ffffff';ctx.shadowBlur=20;
+    ctx.strokeStyle='#ffffff';ctx.lineWidth=5;
+    ctx.beginPath();ctx.moveTo(-16,0);ctx.lineTo(16,0);ctx.stroke();
+    ctx.fillStyle='#ffffffaa';ctx.beginPath();ctx.arc(0,0,4,0,Math.PI*2);ctx.fill();
+
+  } else if(proj.type==='jy_sword_throw'){ // 성검 날리기: 던져진 성검
+    const angle=Math.atan2(proj.vy,proj.vx);
+    ctx.translate(proj.x,proj.y);ctx.rotate(angle);
+    ctx.shadowColor='#ffb37a';ctx.shadowBlur=18;
+    ctx.fillStyle='#ffcf9e';ctx.fillRect(-22,-4,44,8);
+    ctx.fillStyle='#ffe6c8';ctx.beginPath();ctx.arc(22,0,5,0,Math.PI*2);ctx.fill();
+
+  } else if(proj.type==='jy_laser'){ // 찍(변신 전): 강력한 한방 레이저
+    const angle=Math.atan2(proj.vy,proj.vx);
+    ctx.translate(proj.x,proj.y);ctx.rotate(angle);
+    ctx.shadowColor='#ffffff';ctx.shadowBlur=36;
+    ctx.strokeStyle='#ffffff';ctx.lineWidth=9;
+    ctx.beginPath();ctx.moveTo(-36,0);ctx.lineTo(36,0);ctx.stroke();
+
+  } else if(proj.type==='jy_laser_big'){ // 찍(변신 후): 화면 절반을 가리는 거대한 레이저
+    const angle=Math.atan2(proj.vy,proj.vx);
+    ctx.translate(proj.x,proj.y);ctx.rotate(angle);
+    ctx.shadowColor='#ffe6c8';ctx.shadowBlur=50;
+    ctx.strokeStyle='#ffffff';ctx.lineWidth=15;
+    ctx.beginPath();ctx.moveTo(-46,0);ctx.lineTo(46,0);ctx.stroke();
+
+  } else if(proj.type==='curse_potion'){
+    const pulse=0.7+Math.sin(Date.now()/70)*0.3;
+    ctx.shadowColor='#c86edc';ctx.shadowBlur=22*pulse;
+    const g=ctx.createRadialGradient(proj.x,proj.y,1,proj.x,proj.y,13);
+    g.addColorStop(0,'#fff');g.addColorStop(.45,'#c86edc');g.addColorStop(1,'#8a3fa000');
+    ctx.fillStyle=g;ctx.beginPath();ctx.arc(proj.x,proj.y,13,0,Math.PI*2);ctx.fill();
+
+  } else {
+    ctx.shadowColor='#66ccff';ctx.shadowBlur=16;
+    const g=ctx.createRadialGradient(proj.x,proj.y,1,proj.x,proj.y,14);
+    g.addColorStop(0,'#fff');g.addColorStop(.4,'#66ccff');g.addColorStop(1,'#66ccff00');
+    ctx.fillStyle=g;ctx.beginPath();ctx.arc(proj.x,proj.y,14,0,Math.PI*2);ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawHazard(hz){
+  if(hz.type==='ph_card'){
+    ctx.save();
+    const pulse=0.7+Math.sin(Date.now()/140+hz.x)*0.3;
+    ctx.translate(hz.x,hz.y);
+    ctx.rotate(Math.sin(Date.now()/300+hz.x)*0.3);
+    ctx.shadowColor='#f0b93a';ctx.shadowBlur=14*pulse;
+    ctx.fillStyle='#fff8ea';ctx.fillRect(-10,-15,20,30);
+    ctx.strokeStyle='#f0b93a';ctx.lineWidth=2;ctx.strokeRect(-10,-15,20,30);
+    ctx.fillStyle='#d9455f';ctx.beginPath();ctx.arc(0,0,5,0,Math.PI*2);ctx.fill();
+    ctx.restore();
+  }
+}
+
+function drawEffect(fx){
+  const t=fx.life/fx.maxLife;
+  ctx.save();ctx.globalAlpha=t;
+  const col=fx.color||'#f0c040';
+
+  if(fx.type==='hit'){
+    const r=(1-t)*36+8;
+    ctx.strokeStyle='#fff';ctx.lineWidth=3*t;ctx.shadowColor='#ff8800';ctx.shadowBlur=20;
+    for(let i=0;i<8;i++){const a=(i/8)*Math.PI*2,len=r*(.6+.4*(i%2));ctx.beginPath();ctx.moveTo(fx.x,fx.y);ctx.lineTo(fx.x+Math.cos(a)*len,fx.y+Math.sin(a)*len);ctx.stroke();}
+    ctx.fillStyle='#ffcc00';ctx.beginPath();ctx.arc(fx.x,fx.y,8*t,0,Math.PI*2);ctx.fill();
+
+  } else if(fx.type==='parry'){
+    const r=(1-t)*50+12;
+    ctx.strokeStyle='#8be0ff';ctx.lineWidth=4*t;ctx.shadowColor='#8be0ff';ctx.shadowBlur=28;
+    for(let i=0;i<10;i++){const a=(i/10)*Math.PI*2;const len=r*(.5+.5*(i%2));ctx.beginPath();ctx.moveTo(fx.x,fx.y);ctx.lineTo(fx.x+Math.cos(a)*len,fx.y+Math.sin(a)*len);ctx.stroke();}
+    if(t>.55){ctx.font=`bold ${Math.round(20*t)}px Arial`;ctx.fillStyle='#8be0ff';ctx.textAlign='center';ctx.shadowBlur=10;ctx.fillText('저스트가드!',fx.x,fx.y-14);}
+
+  } else if(fx.type==='guard_block'){
+    const r=(1-t)*20+6;
+    ctx.strokeStyle='#8be0ff';ctx.lineWidth=2.5*t;ctx.shadowColor='#8be0ff';ctx.shadowBlur=14;
+    ctx.beginPath();ctx.arc(fx.x,fx.y,r,0,Math.PI*2);ctx.stroke();
+
+  } else if(fx.type==='stun_resist'){
+    ctx.font='bold 11px Arial';ctx.fillStyle='#ff8855';ctx.textAlign='center';ctx.shadowColor='#ff8855';ctx.shadowBlur=8;
+    ctx.fillText('CC 저항',fx.x,fx.y-(1-t)*14);
+
+  } else if(fx.type==='stun_hit'){
+    const r=(1-t)*44+10;
+    ctx.strokeStyle='#ffe066';ctx.lineWidth=3*t;ctx.shadowColor='#ffe066';ctx.shadowBlur=24;
+    ctx.beginPath();ctx.arc(fx.x,fx.y,r,0,Math.PI*2);ctx.stroke();
+    ctx.font=`bold ${Math.round(16+10*t)}px Arial`;ctx.fillStyle='#fff';ctx.textAlign='center';ctx.shadowBlur=10;
+    for(let i=0;i<3;i++){
+      const a=(i/3)*Math.PI*2+Date.now()/140;
+      ctx.save();ctx.globalAlpha=t;
+      ctx.fillText('★',fx.x+Math.cos(a)*r*0.8,fx.y+Math.sin(a)*r*0.5);
+      ctx.restore();
+    }
+
+  } else if(fx.type==='impact'){
+    const pw=fx.power||1;
+    const r=(1-t)*30*pw+6;
+    ctx.strokeStyle='#ffffff';ctx.lineWidth=3.5*t*Math.min(1.3,pw);ctx.shadowColor='#ffffff';ctx.shadowBlur=22*pw;
+    for(let i=0;i<6;i++){const a=(i/6)*Math.PI*2+0.15;const len=r*0.85;ctx.beginPath();ctx.moveTo(fx.x,fx.y);ctx.lineTo(fx.x+Math.cos(a)*len,fx.y+Math.sin(a)*len);ctx.stroke();}
+    ctx.fillStyle='#ffffffcc';ctx.beginPath();ctx.arc(fx.x,fx.y,7*t*pw,0,Math.PI*2);ctx.fill();
+
+  } else if(fx.type==='ultimate'){
+    const r=(1-t)*260+10;
+    ctx.strokeStyle=col;ctx.lineWidth=6*t;ctx.shadowColor=col;ctx.shadowBlur=40;
+    ctx.beginPath();ctx.arc(fx.x,fx.y,r,0,Math.PI*2);ctx.stroke();
+    const ig=ctx.createRadialGradient(fx.x,fx.y,0,fx.x,fx.y,r*.5);
+    ig.addColorStop(0,col+'55');ig.addColorStop(1,col+'00');
+    ctx.fillStyle=ig;ctx.beginPath();ctx.arc(fx.x,fx.y,r*.5,0,Math.PI*2);ctx.fill();
+    if(t>.6){ctx.font=`bold ${Math.round(34*t)}px Arial`;ctx.fillStyle='#fff';ctx.textAlign='center';ctx.fillText('궁극기!',fx.x,fx.y-10);}
+
+  } else if(fx.type==='laser'){
+    const facing=fx.extra??1;
+    const mapW=gameState&&gameState.map?gameState.map.width:W;
+    const endX=facing>0?mapW:0;
+    const bgrd=ctx.createLinearGradient(fx.x,0,endX,0);
+    bgrd.addColorStop(0,col);bgrd.addColorStop(.4,col+'aa');bgrd.addColorStop(1,col+'00');
+    ctx.fillStyle=bgrd;ctx.fillRect(Math.min(fx.x,endX),fx.y-20*t,Math.abs(endX-fx.x),40*t);
+    ctx.strokeStyle='#ffffff';ctx.lineWidth=6*t;ctx.shadowColor=col;ctx.shadowBlur=35;
+    ctx.beginPath();ctx.moveTo(fx.x,fx.y);ctx.lineTo(endX,fx.y);ctx.stroke();
+
+  } else if(fx.type==='barrier'){
+    const pu=Math.sin(Date.now()/80)*.15+.85;
+    ctx.strokeStyle=col;ctx.lineWidth=3*t;ctx.shadowColor=col;ctx.shadowBlur=25*pu;
+    const bW=60,bH=90;
+    ctx.strokeRect(fx.x-bW/2,fx.y-bH/2,bW,bH);
+    for(let i=1;i<=2;i++){ctx.beginPath();ctx.moveTo(fx.x-bW/2,fx.y-bH/2+bH*i/3);ctx.lineTo(fx.x+bW/2,fx.y-bH/2+bH*i/3);ctx.stroke();}
+    ctx.beginPath();ctx.moveTo(fx.x,fx.y-bH/2);ctx.lineTo(fx.x,fx.y+bH/2);ctx.stroke();
+
+  } else if(fx.type==='whirl'){
+    const r=(1-t)*70+15;
+    ctx.strokeStyle=col;ctx.lineWidth=4*t;ctx.shadowColor=col;ctx.shadowBlur=20;
+    for(let i=0;i<3;i++){const rr=r-(i*14);if(rr>0){ctx.beginPath();ctx.arc(fx.x,fx.y,rr,0,Math.PI*1.6);ctx.stroke();}}
+
+  } else if(fx.type==='sword_launch'){
+    const r=(1-t)*120+10;
+    ctx.strokeStyle=col;ctx.lineWidth=4*t;ctx.shadowColor=col;ctx.shadowBlur=40;
+    ctx.beginPath();ctx.arc(fx.x,fx.y,r,0,Math.PI*2);ctx.stroke();
+
+  } else if(fx.type==='transform_out'){
+    const r=(1-t)*70+5;
+    ctx.strokeStyle=col;ctx.lineWidth=3*t;ctx.shadowColor=col;ctx.shadowBlur=20;
+    for(let i=0;i<3;i++){const rr=r-i*18;if(rr>0){ctx.beginPath();ctx.arc(fx.x,fx.y,rr,0,Math.PI*2);ctx.stroke();}}
+
+  } else if(fx.type==='dash'){
+    ctx.fillStyle=col;ctx.globalAlpha=t*.6;
+    ctx.beginPath();ctx.ellipse(fx.x,fx.y,50*t,20*t,0,0,Math.PI*2);ctx.fill();
+
+  } else if(fx.type==='turtle_charge'){
+    const dir=fx.extra||1;
+    const endX=fx.endX!==undefined?fx.endX:fx.x+dir*300;
+    const travel=fx.x+(endX-fx.x)*(1-t);
+    ctx.globalAlpha=1;
+    // 항적(물보라) 연기
+    ctx.fillStyle=col;ctx.globalAlpha=t*.5;
+    for(let i=0;i<5;i++){
+      const wx=travel-dir*i*22;
+      ctx.beginPath();ctx.ellipse(wx,fx.y-6+Math.sin(i)*3,26-i*3,10-i,0,0,Math.PI*2);ctx.fill();
+    }
+    ctx.globalAlpha=1;
+    // 거북선 본체
+    ctx.save();ctx.translate(travel,fx.y-30);ctx.scale(dir,1);
+    ctx.shadowColor='#2a2015';ctx.shadowBlur=14;
+    ctx.fillStyle='#2a2015';
+    ctx.beginPath();ctx.moveTo(-46,10);ctx.quadraticCurveTo(-50,-14,-20,-20);ctx.lineTo(30,-20);ctx.quadraticCurveTo(50,-14,46,10);ctx.closePath();ctx.fill();
+    ctx.fillStyle='#3a3020';
+    ctx.beginPath();ctx.ellipse(0,-22,40,10,0,0,Math.PI*2);ctx.fill();
+    for(let i=-3;i<=3;i++){ctx.fillStyle='#151008';ctx.beginPath();ctx.arc(i*10,-22,2.5,0,Math.PI*2);ctx.fill();}
+    ctx.fillStyle='#cc3322';
+    ctx.beginPath();ctx.moveTo(40,-14);ctx.lineTo(56,-4);ctx.lineTo(40,4);ctx.closePath();ctx.fill();
+    ctx.restore();
+
+  } else if(fx.type==='counter'){
+    const r=(1-t)*60+10;
+    ctx.strokeStyle='#88eeff';ctx.lineWidth=4*t;ctx.beginPath();ctx.arc(fx.x,fx.y,r,0,Math.PI*2);ctx.stroke();
+
+  } else if(fx.type==='ult_charge'){
+    // 범용 궁극기 시전 오라 (발밑에서 소용돌이치며 힘을 모은다)
+    const pu=0.6+Math.sin(Date.now()/70)*0.4;
+    ctx.globalAlpha=1;
+    for(let i=0;i<3;i++){
+      const rr=18+i*14+Math.sin(Date.now()/120+i)*6;
+      ctx.strokeStyle=col;ctx.lineWidth=3;ctx.shadowColor=col;ctx.shadowBlur=18*pu;
+      ctx.beginPath();ctx.ellipse(fx.x,fx.y+30,rr,rr*.32,0,0,Math.PI*2);ctx.stroke();
+    }
+
+  } else if(fx.type==='cross_slash'){
+    const dir=fx.extra||1;
+    ctx.strokeStyle='#eaf4ff';ctx.lineWidth=6*t;ctx.shadowColor=col;ctx.shadowBlur=30;
+    ctx.beginPath();
+    if(dir>0){ctx.moveTo(fx.x-90,fx.y-70);ctx.lineTo(fx.x+90,fx.y+50);}
+    else{ctx.moveTo(fx.x-90,fx.y+50);ctx.lineTo(fx.x+90,fx.y-70);}
+    ctx.stroke();
+
+  } else if(fx.type==='excalibur_charge'){
+    const pu=0.6+Math.sin(Date.now()/60)*0.4;
+    ctx.strokeStyle='#fff3c0';ctx.lineWidth=3;ctx.shadowColor='#f2d675';ctx.shadowBlur=26*pu;
+    ctx.beginPath();ctx.moveTo(fx.x,fx.y);ctx.lineTo(fx.x,fx.y-150*t);ctx.stroke();
+    const g=ctx.createRadialGradient(fx.x,fx.y-150*t,2,fx.x,fx.y-150*t,26);
+    g.addColorStop(0,'#fff');g.addColorStop(.5,'#f2d675');g.addColorStop(1,'#f2d67500');
+    ctx.fillStyle=g;ctx.beginPath();ctx.arc(fx.x,fx.y-150*t,26,0,Math.PI*2);ctx.fill();
+
+  } else if(fx.type==='excalibur_descend'){
+    ctx.strokeStyle='#fff8dd';ctx.lineWidth=8*t;ctx.shadowColor='#f2d675';ctx.shadowBlur=30;
+    ctx.beginPath();ctx.moveTo(fx.x,fx.y-260);ctx.lineTo(fx.x,fx.y);ctx.stroke();
+
+  } else if(fx.type==='excalibur_strike'){
+    const r=(1-t)*220+20;
+    ctx.strokeStyle='#f2d675';ctx.lineWidth=7*t;ctx.shadowColor='#fff3c0';ctx.shadowBlur=45;
+    ctx.beginPath();ctx.arc(fx.x,fx.y,r,0,Math.PI*2);ctx.stroke();
+    ctx.fillStyle='#f2d67555';ctx.beginPath();ctx.ellipse(fx.x,fx.y+8,r*.9,r*.28,0,0,Math.PI*2);ctx.fill();
+    if(t>.55){ctx.font=`bold ${Math.round(30*t)}px Arial`;ctx.fillStyle='#fff8dd';ctx.textAlign='center';ctx.fillText('엑스칼리버!',fx.x,fx.y-30);}
+
+  } else if(fx.type==='dragon_aura'){
+    const pu=0.6+Math.sin(Date.now()/90)*0.4;
+    ctx.strokeStyle='#33cc66';ctx.lineWidth=3;ctx.shadowColor='#7fffa0';ctx.shadowBlur=20*pu;
+    for(let i=0;i<2;i++){const rr=30+i*22;ctx.beginPath();ctx.arc(fx.x,fx.y,rr,Math.PI*.2,Math.PI*1.5+i);ctx.stroke();}
+
+  } else if(fx.type==='moon_telegraph'){
+    const pu=0.5+Math.sin(Date.now()/150)*0.5;
+    ctx.strokeStyle='#c8f0a0';ctx.lineWidth=2.5;ctx.shadowColor='#eaffcc';ctx.shadowBlur=16*pu;
+    ctx.beginPath();ctx.ellipse(fx.x,fx.y+40,130,26,0,0,Math.PI*2);ctx.stroke();
+
+  } else if(fx.type==='bow_charge'){
+    const pu=0.6+Math.sin(Date.now()/50)*0.4;
+    ctx.strokeStyle='#aaffcc';ctx.lineWidth=3;ctx.shadowColor='#66ffaa';ctx.shadowBlur=24*pu;
+    ctx.beginPath();ctx.arc(fx.x,fx.y-40,20+8*t,Math.PI*.65,Math.PI*1.35);ctx.stroke();
+
+  } else if(fx.type==='storm_ring'){
+    const spin=Date.now()/120;
+    ctx.strokeStyle=col;ctx.lineWidth=4;ctx.shadowColor=col;ctx.shadowBlur=22;
+    for(let i=0;i<2;i++){
+      ctx.beginPath();ctx.ellipse(fx.x,fx.y,70,26,spin+i*Math.PI,0,Math.PI*1.6);ctx.stroke();
+    }
+
+  } else if(fx.type==='rune_mark'){
+    const pu=0.5+Math.sin(Date.now()/130)*0.5;
+    ctx.strokeStyle=col;ctx.lineWidth=2.5;ctx.shadowColor=col;ctx.shadowBlur=18*pu;
+    ctx.save();ctx.translate(fx.x,fx.y+40);ctx.rotate(Date.now()/900);
+    ctx.beginPath();ctx.arc(0,0,34,0,Math.PI*2);ctx.stroke();
+    for(let i=0;i<6;i++){const a=i/6*Math.PI*2;ctx.beginPath();ctx.moveTo(Math.cos(a)*34,Math.sin(a)*10);ctx.lineTo(Math.cos(a)*44,Math.sin(a)*13);ctx.stroke();}
+    ctx.restore();
+
+  } else if(fx.type==='judgment_beam'){
+    ctx.strokeStyle='#fff';ctx.lineWidth=7*t;ctx.shadowColor=col;ctx.shadowBlur=40;
+    ctx.beginPath();ctx.moveTo(fx.x,fx.y-260);ctx.lineTo(fx.x,fx.y+30);ctx.stroke();
+    ctx.fillStyle=col+'55';ctx.beginPath();ctx.ellipse(fx.x,fx.y+30,26*t,10*t,0,0,Math.PI*2);ctx.fill();
+
+  } else if(fx.type==='turtle_summon'){
+    const r=(1-t)*10+60*(1-t);
+    ctx.strokeStyle='#2a2015';ctx.lineWidth=4;ctx.shadowColor=col;ctx.shadowBlur=20;
+    ctx.beginPath();ctx.ellipse(fx.x,fx.y,80*(1-t)+20,18*(1-t)+6,0,0,Math.PI*2);ctx.stroke();
+    ctx.fillStyle=col+'33';ctx.beginPath();ctx.ellipse(fx.x,fx.y,80*(1-t)+20,18*(1-t)+6,0,0,Math.PI*2);ctx.fill();
+
+  } else if(fx.type==='turtle_cannon'){
+    const dir=fx.extra||1;
+    ctx.fillStyle='#ffdd88';ctx.shadowColor='#ff8822';ctx.shadowBlur=18;
+    ctx.beginPath();ctx.arc(fx.x,fx.y,7*t+3,0,Math.PI*2);ctx.fill();
+    ctx.strokeStyle='#ffaa4488';ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(fx.x,fx.y);ctx.lineTo(fx.x+dir*24*t,fx.y);ctx.stroke();
+
+  } else if(fx.type==='khan_charge'){
+    const dir=fx.extra||1;
+    ctx.fillStyle=col;ctx.globalAlpha=t*.55;
+    for(let i=0;i<4;i++){ctx.beginPath();ctx.ellipse(fx.x-dir*i*20,fx.y+6,26-i*4,12-i*2,0,0,Math.PI*2);ctx.fill();}
+    ctx.globalAlpha=t;ctx.strokeStyle='#dfe8ff';ctx.lineWidth=3;ctx.shadowColor=col;ctx.shadowBlur=16;
+    ctx.beginPath();ctx.moveTo(fx.x-dir*40,fx.y-30);ctx.lineTo(fx.x+dir*10,fx.y-4);ctx.stroke();
+
+  } else if(fx.type==='shadow_clone'){
+    ctx.fillStyle=col;ctx.globalAlpha=t*.5;
+    ctx.beginPath();ctx.ellipse(fx.x,fx.y-30,18,44,0,0,Math.PI*2);ctx.fill();
+    ctx.strokeStyle='#dfe0ff';ctx.lineWidth=2*t;ctx.globalAlpha=t;
+    ctx.beginPath();ctx.ellipse(fx.x,fx.y-30,18,44,0,0,Math.PI*2);ctx.stroke();
+
+  } else if(fx.type==='jingke_scroll'){
+    ctx.strokeStyle='#993355';ctx.lineWidth=2;ctx.shadowColor='#993355';ctx.shadowBlur=10;
+    ctx.fillStyle='#1c162066';
+    ctx.beginPath();ctx.roundRect(fx.x-30*t-8,fx.y-52,60*t+16,10,3);ctx.fill();ctx.stroke();
+
+  } else if(fx.type==='assassinate'){
+    ctx.strokeStyle='#ff3355';ctx.lineWidth=5*t;ctx.shadowColor='#ff3355';ctx.shadowBlur=30;
+    ctx.beginPath();ctx.moveTo(fx.x-60,fx.y-50);ctx.lineTo(fx.x+60,fx.y+30);ctx.stroke();
+    if(t>.6){ctx.font=`bold ${Math.round(26*t)}px Arial`;ctx.fillStyle='#ff5566';ctx.textAlign='center';ctx.fillText('필살!',fx.x,fx.y-60);}
+
+  } else if(fx.type==='polymorph'){
+    const r=(1-t)*50+14;
+    ctx.strokeStyle='#c86edc';ctx.lineWidth=3*t;ctx.shadowColor='#c86edc';ctx.shadowBlur=20;
+    ctx.beginPath();ctx.arc(fx.x,fx.y,r,0,Math.PI*2);ctx.stroke();
+    ctx.fillStyle='#c86edc33';ctx.beginPath();ctx.arc(fx.x,fx.y,r,0,Math.PI*2);ctx.fill();
+
+  } else if(fx.type==='turtle_sky_shadow'){
+    // 거북선이 떨어질 지점을 미리 알리는 그림자 + 하늘에서 쏟아지는 빛줄기
+    const grow=Math.min(1,(1-t)*1.6);
+    ctx.globalAlpha=0.55*grow;
+    ctx.fillStyle='#000814';
+    ctx.beginPath();ctx.ellipse(fx.x,fx.y,92*grow,22*grow,0,0,Math.PI*2);ctx.fill();
+    ctx.globalAlpha=0.3*grow;
+    ctx.fillStyle='#ffdd88';ctx.shadowColor='#ffdd88';ctx.shadowBlur=24;
+    ctx.beginPath();ctx.moveTo(fx.x-46*grow,fx.y);ctx.lineTo(fx.x-14,fx.y-520);ctx.lineTo(fx.x+14,fx.y-520);ctx.lineTo(fx.x+46*grow,fx.y);ctx.closePath();ctx.fill();
+
+  } else if(fx.type==='turtle_falling'){
+    // 하늘에서 서서히 떨어져 내리는 거대한 거북선
+    const prog=1-t;
+    const dropY=fx.y-520*(1-prog);
+    const dir=fx.extra||1;
+    ctx.globalAlpha=1;
+    ctx.strokeStyle='#ffdd8866';ctx.lineWidth=8;
+    ctx.beginPath();ctx.moveTo(fx.x,dropY-90);ctx.lineTo(fx.x,dropY-24);ctx.stroke();
+    ctx.save();ctx.translate(fx.x,dropY);ctx.scale(dir,1);
+    ctx.shadowColor='#2a2015';ctx.shadowBlur=22;
+    ctx.fillStyle='#2a2015';
+    ctx.beginPath();ctx.moveTo(-58,14);ctx.quadraticCurveTo(-64,-18,-26,-26);ctx.lineTo(38,-26);ctx.quadraticCurveTo(64,-18,58,14);ctx.closePath();ctx.fill();
+    ctx.fillStyle='#3a3020';
+    ctx.beginPath();ctx.ellipse(0,-28,50,13,0,0,Math.PI*2);ctx.fill();
+    for(let i=-4;i<=4;i++){ctx.fillStyle='#151008';ctx.beginPath();ctx.arc(i*11,-28,3,0,Math.PI*2);ctx.fill();}
+    ctx.fillStyle='#cc3322';
+    ctx.beginPath();ctx.moveTo(50,-18);ctx.lineTo(70,-4);ctx.lineTo(50,6);ctx.closePath();ctx.fill();
+    ctx.restore();
+
+  } else if(fx.type==='turtle_land_impact'){
+    // 거북선 착지 충격파 - 흙먼지와 균열
+    const r=(1-t)*170+24;
+    ctx.strokeStyle='#fff3c0';ctx.lineWidth=7*t;ctx.shadowColor='#ffaa44';ctx.shadowBlur=45;
+    ctx.beginPath();ctx.ellipse(fx.x,fx.y,r,r*.3,0,0,Math.PI*2);ctx.stroke();
+    ctx.fillStyle='#3a281888';
+    for(let i=0;i<7;i++){const a=(i/7)*Math.PI*2;ctx.beginPath();ctx.ellipse(fx.x+Math.cos(a)*r*.6,fx.y+Math.sin(a)*r*.14,15*t,7*t,0,0,Math.PI*2);ctx.fill();}
+
+  } else if(fx.type==='poison_hit'){
+    const r=(1-t)*30+8;
+    ctx.strokeStyle='#5fd45f';ctx.lineWidth=3*t;ctx.shadowColor='#5fd45f';ctx.shadowBlur=18;
+    ctx.beginPath();ctx.arc(fx.x,fx.y,r,0,Math.PI*2);ctx.stroke();
+    ctx.fillStyle='#8be08b';ctx.globalAlpha=t*.7;
+    ctx.beginPath();ctx.arc(fx.x,fx.y,7*t,0,Math.PI*2);ctx.fill();
+
+  } else if(fx.type==='poison_tick'){
+    ctx.fillStyle='#5fd45f';ctx.shadowColor='#5fd45f';ctx.shadowBlur=12;
+    for(let i=0;i<3;i++){
+      const dx=(i-1)*10,dy=-t*16-i*3;
+      ctx.globalAlpha=t*.8;
+      ctx.beginPath();ctx.arc(fx.x+dx,fx.y+dy,2.5,0,Math.PI*2);ctx.fill();
+    }
+
+  } else if(fx.type==='hook_pull'){
+    ctx.strokeStyle=col;ctx.lineWidth=3*t;ctx.shadowColor=col;ctx.shadowBlur=16;
+    for(let i=0;i<3;i++){const a=(i/3)*Math.PI*2+Date.now()/200;ctx.beginPath();ctx.moveTo(fx.x,fx.y);ctx.lineTo(fx.x+Math.cos(a)*18*t,fx.y+Math.sin(a)*18*t);ctx.stroke();}
+    ctx.fillStyle=col;ctx.globalAlpha=t*.6;ctx.beginPath();ctx.arc(fx.x,fx.y,10*(1-t)+4,0,Math.PI*2);ctx.fill();
+
+  } else if(fx.type==='speed_buff'){
+    ctx.strokeStyle='#8be08b';ctx.lineWidth=2;ctx.shadowColor=col;ctx.shadowBlur=10;
+    ctx.globalAlpha=0.5*t;
+    for(let i=0;i<3;i++){
+      const off=(Date.now()/40+i*30)%40;
+      ctx.beginPath();ctx.moveTo(fx.x-20-off,fx.y-10+i*10);ctx.lineTo(fx.x-6-off,fx.y-10+i*10);ctx.stroke();
+    }
+
+  } else if(fx.type==='ground_crack'){
+    const r=(1-t)*46+10;
+    ctx.strokeStyle='#ffcc88';ctx.lineWidth=3*t;ctx.shadowColor=col;ctx.shadowBlur=16;
+    for(let i=0;i<5;i++){const a=-Math.PI/2+(i-2)*0.4;ctx.beginPath();ctx.moveTo(fx.x,fx.y);ctx.lineTo(fx.x+Math.cos(a)*r,fx.y+Math.sin(a)*r*.3);ctx.stroke();}
+
+  } else if(fx.type==='yisunsin_mount'){
+    // 거북선 위로 뛰어오르는 탑승 모션의 잔상
+    ctx.strokeStyle='#ffdd88';ctx.lineWidth=3*t;ctx.shadowColor=col;ctx.shadowBlur=18;
+    ctx.beginPath();ctx.ellipse(fx.x,fx.y,32*(1-t)+8,11*(1-t)+3,0,0,Math.PI*2);ctx.stroke();
+
+  } else if(fx.type==='jy_shout'){ // "영차!" 대사 말풍선
+    ctx.font=`bold ${Math.round(15*t+8)}px Arial`;ctx.fillStyle='#fff';ctx.textAlign='center';
+    ctx.shadowColor=col;ctx.shadowBlur=10;
+    ctx.fillText(fx.text||'영차!',fx.x,fx.y-(1-t)*14);
+
+  } else if(fx.type==='jy_windup'){ // 찍: 손을 앞뒤로 왔다갔다 하는 예비동작 잔상
+    ctx.strokeStyle='#fff';ctx.lineWidth=3*t;ctx.shadowColor='#dfe8f5';ctx.shadowBlur=14;
+    ctx.beginPath();ctx.moveTo(fx.x-14,fx.y);ctx.lineTo(fx.x+14,fx.y);ctx.stroke();
+
+  } else if(fx.type==='jy_reveal'){ // 성검 해방: 다리 사이에서 성검이 솟아오르는 빛줄기
+    const r=(1-t)*28+10;
+    ctx.strokeStyle='#ffcf9e';ctx.lineWidth=5*t;ctx.shadowColor='#ffb37a';ctx.shadowBlur=36;
+    ctx.beginPath();ctx.moveTo(fx.x,fx.y+40);ctx.lineTo(fx.x,fx.y-120);ctx.stroke();
+    ctx.beginPath();ctx.arc(fx.x,fx.y-120,r,0,Math.PI*2);ctx.stroke();
+    if(t>.5){ctx.font=`bold ${Math.round(22*t)}px Arial`;ctx.fillStyle='#ffcf9e';ctx.textAlign='center';ctx.shadowBlur=14;ctx.fillText('해방!',fx.x,fx.y-140);}
+
+  } else if(fx.type==='turtle_ride'){
+    // 이순신을 태우고 천천히, 눈에 보일 정도의 속도로 전진하는 거북선
+    const dir=fx.extra||1;
+    const endX=fx.endX!==undefined?fx.endX:fx.x+dir*400;
+    const travel=fx.x+(endX-fx.x)*(1-t);
+    ctx.globalAlpha=1;
+    ctx.fillStyle=col;ctx.globalAlpha=.4;
+    for(let i=0;i<6;i++){
+      const wx=travel-dir*i*24;
+      ctx.beginPath();ctx.ellipse(wx,fx.y-4+Math.sin(i+Date.now()/200)*3,30-i*3,11-i,0,0,Math.PI*2);ctx.fill();
+    }
+    ctx.globalAlpha=1;
+    ctx.save();ctx.translate(travel,fx.y-30);ctx.scale(dir,1);
+    ctx.shadowColor='#2a2015';ctx.shadowBlur=18;
+    ctx.fillStyle='#2a2015';
+    ctx.beginPath();ctx.moveTo(-58,14);ctx.quadraticCurveTo(-64,-18,-26,-26);ctx.lineTo(38,-26);ctx.quadraticCurveTo(64,-18,58,14);ctx.closePath();ctx.fill();
+    ctx.fillStyle='#3a3020';
+    ctx.beginPath();ctx.ellipse(0,-28,50,13,0,0,Math.PI*2);ctx.fill();
+    for(let i=-4;i<=4;i++){ctx.fillStyle='#151008';ctx.beginPath();ctx.arc(i*11,-28,3,0,Math.PI*2);ctx.fill();}
+    ctx.fillStyle='#cc3322';
+    ctx.beginPath();ctx.moveTo(50,-18);ctx.lineTo(70,-4);ctx.lineTo(50,6);ctx.closePath();ctx.fill();
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
+function drawHPBar(p,side){
+  const bw=280,bh=18,x=side===0?20:W-20-bw,y=14;
+  const pct=Math.max(0,p.hp/(p.maxHp||170));
+  const hpCol=pct>.5?'#33ff66':pct>.25?'#ffaa00':'#ff3333';
+  ctx.fillStyle='#00000099';ctx.beginPath();ctx.roundRect(x-2,y-2,bw+4,bh+4,5);ctx.fill();
+  ctx.fillStyle='#1a1a2e';ctx.beginPath();ctx.roundRect(x,y,bw,bh,4);ctx.fill();
+  const fw=bw*pct,fx2=side===0?x:x+bw-fw;
+  const hg=ctx.createLinearGradient(fx2,0,fx2+fw,0);
+  hg.addColorStop(0,hpCol);hg.addColorStop(1,hpCol+'88');
+  ctx.fillStyle=hg;ctx.shadowColor=hpCol;ctx.shadowBlur=8;
+  ctx.beginPath();ctx.roundRect(fx2,y,fw,bh,4);ctx.fill();ctx.shadowBlur=0;
+  ctx.font='bold 11px Arial';ctx.fillStyle='#fff';ctx.textAlign='center';
+  ctx.fillText(`${charName(p.charId)}  ${Math.ceil(p.hp)} / ${p.maxHp}`,x+bw/2,y+bh*.72);
+
+  const gy=y+bh+3,gh=8;
+  const gPct=Math.min(1,p.ultGauge/ULT_GAUGE_MAX);
+  const ready=p.ultGauge>=ULT_GAUGE_MAX;
+  const gCol=ready?'#f0c040':'#664400';
+  ctx.fillStyle='#00000099';ctx.beginPath();ctx.roundRect(x-2,gy-1,bw+4,gh+2,3);ctx.fill();
+  ctx.fillStyle='#1a1a2e';ctx.beginPath();ctx.roundRect(x,gy,bw,gh,2);ctx.fill();
+  const gfw=bw*gPct,gfx=side===0?x:x+bw-gfw;
+  if(ready){ctx.shadowColor='#f0c040';ctx.shadowBlur=10+Math.sin(Date.now()/200)*5;}
+  ctx.fillStyle=gCol;ctx.beginPath();ctx.roundRect(gfx,gy,gfw,gh,2);ctx.fill();ctx.shadowBlur=0;
+  ctx.font='9px Arial';ctx.fillStyle=ready?'#f0c040':'#664400';ctx.textAlign='center';
+  ctx.fillText(ready?'▶ O키로 궁극기!':`필살기 ${p.ultGauge}/${ULT_GAUGE_MAX}`,x+bw/2,gy+gh+9);
+}
+
+function drawSkillBar(p,side){
+  const bw=280,sx=side===0?20:W-20-bw,y=H-54;
+  const isJY=p.charId==='saber_jangyujun';
+  const names=skillNamesFor(p);
+  const sw2=bw/6;
+  ctx.fillStyle='#00000066';ctx.beginPath();ctx.roundRect(sx-4,y-6,bw+8,52,6);ctx.fill();
+
+  for(let i=0;i<6;i++){
+    const k=SK_KEYS[i];
+    const slotX=sx+i*sw2+sw2*.04,sw=sw2*.92;
+    const sc=SK_COLOR[i];
+    let ready,fillFrac,subLabel;
+
+    if(k==='atk'&&isJY&&!p.transformed){
+      ready=false;fillFrac=0;subLabel='봉인됨';
+    } else if(k==='atk'){
+      const rec=p.atkRecoveryTimer||0;
+      const step=(p.comboStep||0)+1;
+      const wasFinisher=(p.attackStep!=null?p.attackStep:0)===COMBO_ATK.length-1;
+      const recMax=wasFinisher?COMBO_FINISHER_CD:(COMBO_ATK[p.attackStep!=null?p.attackStep:0]||COMBO_ATK[0]).recovery;
+      ready=rec===0;
+      fillFrac=ready?1:1-rec/Math.max(1,recMax);
+      subLabel=ready?`평타 ${step}/4`:(wasFinisher?(rec/60).toFixed(1)+'s':'대기중');
+    } else if(k==='x'&&isJY&&p.transformed){
+      ready=false;fillFrac=1;subLabel='해방 완료';
+    } else if(k==='x'){
+      ready=p.ultGauge>=ULT_GAUGE_MAX;
+      fillFrac=Math.min(1,p.ultGauge/ULT_GAUGE_MAX);
+      subLabel=ready?(ULT_NAMES[p.charId]||'준비!'):`${p.ultGauge}/${ULT_GAUGE_MAX}`;
+    } else if(k==='f'&&isJY&&p.transformed&&p._jyLaserUsed){
+      ready=false;fillFrac=0;subLabel='사용완료';
+    } else {
+      const cd=p.cooldowns[k]??0;
+      const cdBase=(k==='f'&&isJY)?JY_F_COOLDOWN:(CLASS_CD[p.class]&&CLASS_CD[p.class][k]||60);
+      const cdMax=Math.max(1,Math.round(cdBase));
+      ready=cd===0;
+      fillFrac=ready?1:1-cd/cdMax;
+      subLabel=ready?(names[k]||''):(cd/60).toFixed(1)+'s';
+    }
+
+    ctx.fillStyle=ready?sc+'33':'#1a1a2e';
+    ctx.beginPath();ctx.roundRect(slotX,y,sw,40,4);ctx.fill();
+    if(!ready){
+      ctx.fillStyle=sc+'55';
+      ctx.beginPath();ctx.roundRect(slotX,y+40*(1-fillFrac),sw,40*fillFrac,[0,0,4,4]);ctx.fill();
+    }
+    ctx.strokeStyle=ready?sc:'#333';ctx.lineWidth=ready?2:1;
+    if(ready){ctx.shadowColor=sc;ctx.shadowBlur=(k==='x')?12+Math.sin(Date.now()/150)*6:8;}
+    ctx.beginPath();ctx.roundRect(slotX,y,sw,40,4);ctx.stroke();ctx.shadowBlur=0;
+    ctx.font='bold 12px Arial';ctx.fillStyle=ready?sc:'#444';ctx.textAlign='center';
+    ctx.fillText(SK_LABEL[i],slotX+sw/2,y+15);
+    ctx.font='7.5px Arial';ctx.fillStyle=ready?sc:'#666';
+    ctx.fillText(subLabel,slotX+sw/2,y+29);
+  }
+}
+
+function drawOverlay(snap){
+  if(snap.phase==='waiting'){
+    ctx.fillStyle='#00000099';ctx.fillRect(0,0,W,H);
+    ctx.font='bold 32px Arial';ctx.fillStyle='#f0c040';ctx.textAlign='center';
+    ctx.shadowColor='#f0c040';ctx.shadowBlur=20;ctx.fillText('상대를 기다리는 중...',W/2,H/2-16);
+    ctx.font='16px Arial';ctx.fillStyle='#888';ctx.shadowBlur=0;ctx.fillText('같은 링크를 친구에게 공유하세요',W/2,H/2+20);
+  } else if(snap.phase==='countdown'){
+    ctx.fillStyle='#00000066';ctx.fillRect(0,0,W,H);
+    ctx.font='bold 96px Arial';ctx.fillStyle='#f0c040';ctx.textAlign='center';
+    ctx.shadowColor='#f0c040';ctx.shadowBlur=40;ctx.fillText(snap.countdown>0?snap.countdown:'FIGHT!',W/2,H/2+32);
+  } else if(snap.phase==='game_over'){
+    ctx.fillStyle='#00000099';ctx.fillRect(0,0,W,H);
+    const winP=snap.winner!==null?snap.players.find(p=>p&&p.index===snap.winner):null;
+    const wc=winP?winP.color:'#fff';
+    ctx.font='bold 44px Arial';ctx.fillStyle=wc;ctx.textAlign='center';
+    ctx.shadowColor=wc;ctx.shadowBlur=40;
+    ctx.fillText(winP?`${charName(winP.charId)} 승리!`:'무승부!',W/2,H/2-10);
+    ctx.font='18px Arial';ctx.fillStyle='#aaa';ctx.shadowBlur=0;
+    ctx.fillText('다음 판 맵 선택이 곧 시작됩니다...',W/2,H/2+34);
+  }
+}
+
+// ─── Render loop ─────────────────────────────────────────────────────────────
+// 서버는 정확히 60fps(1000/60ms)로 물리 연산을 한다. 클라이언트도 반드시 같은
+// 속도로 예측해야 한다 — requestAnimationFrame은 모니터 주사율(120/144Hz 등)에
+// 따라 더 자주 호출될 수 있어서, 매 프레임마다 predictLocal()을 호출하면
+// 서버보다 중력/이동이 훨씬 빨리 누적되어 위치가 계속 어긋나고 그 결과 강제
+// 보정(스냅)이 반복되며 캐릭터가 위아래로 떠는 것처럼 보인다.
+let physAccum=0,lastFrameTime=performance.now();
+const PHYS_STEP=1000/60;
+function render(){
+  requestAnimationFrame(render);
+  const now=performance.now();
+  let frameDt=now-lastFrameTime;lastFrameTime=now;
+  if(frameDt>250)frameDt=250; // 탭 전환 등으로 인한 긴 정지 이후 폭주 방지
+  physAccum+=frameDt;
+  let steps=0;
+  while(physAccum>=PHYS_STEP&&steps<8){predictLocal();physAccum-=PHYS_STEP;steps++;}
+  if(ultCine){ultCine.elapsed+=frameDt;if(ultCine.elapsed>=ULT_CINE_MS)ultCine=null;}
+  shakeMag*=0.82;
+  const shx=(Math.random()-.5)*2*shakeMag,shy=(Math.random()-.5)*2*shakeMag;
+
+  if(!gameState){
+    ctx.fillStyle='#08080f';ctx.fillRect(0,0,W,H);
+    ctx.font='22px Arial';ctx.fillStyle='#888';ctx.textAlign='center';
+    ctx.fillText('서버에 연결 중...',W/2,H/2);
+    return;
+  }
+
+  syncOverlays(gameState);
+
+  if(gameState.phase==='map_select'||gameState.phase==='char_select'){
+    ctx.fillStyle='#08080f';ctx.fillRect(0,0,W,H);
+    return;
+  }
+
+  const snap=buildDisplay();if(!snap)return;
+  const map=snap.map||{width:W};
+
+  let targetCamX=0;
+  if(snap.players[0]&&snap.players[1]){
+    const mid=(snap.players[0].x+snap.players[1].x)/2;
+    targetCamX=Math.max(0,Math.min(Math.max(0,map.width-W),mid-W/2));
+  }
+  camX+=(targetCamX-camX)*0.12;
+
+  ctx.save();
+  ctx.translate(-camX+shx,shy);
+  ctx.clearRect(camX-60,-60,W+120,H+120);
+  drawBg(map);
+
+  for(const fx of snap.effects)if(!['hit','barrier','impact'].includes(fx.type))drawEffect(fx);
+  for(const p of snap.players)if(p){
+    if(ultCine&&ultCine.index===p.index&&p.action==='skill_x'){
+      const k=ultCineEase(ultCine.elapsed/ULT_CINE_MS);
+      ctx.save();ctx.translate(p.x,p.y);ctx.scale(1+0.6*k,1+0.6*k);ctx.translate(-p.x,-p.y);
+      drawPlayer(p,p.index===myIndex);
+      ctx.restore();
+    } else drawPlayer(p,p.index===myIndex);
+  }
+  for(const hz of (snap.hazards||[]))drawHazard(hz);
+  for(const proj of snap.projectiles)drawProjectile(proj);
+  for(const fx of snap.effects)if(['hit','barrier','impact'].includes(fx.type))drawEffect(fx);
+
+  ctx.restore();
+
+  if(ultCine)drawUltCinematic(ultCine,camX);
+
+  const p0=snap.players.find(p=>p&&p.index===0),p1=snap.players.find(p=>p&&p.index===1);
+  if(p0){drawHPBar(p0,0);drawSkillBar(p0,0);}
+  if(p1){drawHPBar(p1,1);drawSkillBar(p1,1);}
+  if(p0&&p1&&snap.phase==='playing'){
+    ctx.font='bold 16px Arial';ctx.fillStyle='#ffffff44';ctx.textAlign='center';
+    ctx.fillText('VS',W/2,26);
+  }
+  drawOverlay(snap);
+  drawReconnectOverlay(snap);
+}
+
+function drawReconnectOverlay(snap){
+  if(snap.disconnectedIndex===null||snap.disconnectedIndex===undefined)return;
+  const secsLeft=snap.reconnectDeadline?Math.max(0,Math.ceil((snap.reconnectDeadline-Date.now())/1000)):0;
+  ctx.save();
+  ctx.fillStyle='rgba(8,8,15,0.72)';ctx.fillRect(0,0,W,H);
+  ctx.textAlign='center';
+  ctx.font='bold 20px Arial';ctx.fillStyle='#f0c040';ctx.shadowColor='#f0c040';ctx.shadowBlur=14;
+  ctx.fillText('상대방 연결 끊김',W/2,H/2-16);
+  ctx.shadowBlur=0;
+  ctx.font='15px Arial';ctx.fillStyle='#ccc';
+  ctx.fillText(`재접속을 기다리는 중... (${secsLeft}초 후 몰수패 처리)`,W/2,H/2+16);
+  ctx.restore();
+}
+
+// 0→1 진행률을 부드러운 페이드 인/아웃 계수로 변환 (연출 시작/끝을 자연스럽게)
+function ultCineEase(t){
+  if(t<0.18)return t/0.18;
+  if(t>0.75)return Math.max(0,(1-t)/0.25);
+  return 1;
+}
+
+function drawUltCinematic(cine,camXNow){
+  const k=ultCineEase(cine.elapsed/ULT_CINE_MS);
+  if(k<=0.01)return;
+  const sx=cine.x-camXNow,sy=cine.y;
+  ctx.save();
+  // 비네트(테두리 어둡게)
+  const vg=ctx.createRadialGradient(sx,sy-60,40,sx,sy-60,W*0.75);
+  vg.addColorStop(0,'rgba(0,0,0,0)');
+  vg.addColorStop(1,`rgba(0,0,0,${0.55*k})`);
+  ctx.fillStyle=vg;ctx.fillRect(0,0,W,H);
+  // 레터박스(영화적 느낌의 위아래 바)
+  const barH=34*k;
+  ctx.fillStyle=`rgba(0,0,0,${0.85*k})`;
+  ctx.fillRect(0,0,W,barH);ctx.fillRect(0,H-barH,W,barH);
+  // 캐릭터 이름 + 대사
+  ctx.textAlign='center';
+  ctx.globalAlpha=k;
+  ctx.font='bold 15px Arial';ctx.fillStyle=cine.color||'#f0c040';
+  ctx.shadowColor=cine.color||'#f0c040';ctx.shadowBlur=14;
+  ctx.fillText(cine.name,W/2,H*0.28);
+  ctx.shadowBlur=0;
+  ctx.font='bold 22px Arial';ctx.fillStyle='#fff';
+  ctx.shadowColor='#000';ctx.shadowBlur=6;
+  ctx.fillText(`"${cine.line}"`,W/2,H*0.28+30);
+  ctx.restore();
+}
+render();
+</script>
+</body>
+</html>
